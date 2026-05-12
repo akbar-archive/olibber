@@ -1,7 +1,12 @@
 import os
+import secrets
+from contextlib import asynccontextmanager
+from typing import Any
 
-from aiohttp import web
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+import uvicorn
+from aiogram.methods.base import TelegramMethod
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from src.bot.app import create_bot, create_dispatcher
 
@@ -13,38 +18,53 @@ WEBHOOK_HOST = os.getenv("TELEGRAM_WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("TELEGRAM_WEBHOOK_PORT", "8000"))
 
 
-def create_app() -> web.Application:
+def create_app() -> FastAPI:
     bot = create_bot()
     dispatcher = create_dispatcher()
 
-    app = web.Application()
-
-    async def on_startup(app: web.Application) -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         if not WEBHOOK_URL:
             raise RuntimeError("TELEGRAM_WEBHOOK_URL is not set")
 
+        workflow_data = {
+            "app": app,
+            "dispatcher": dispatcher,
+            **dispatcher.workflow_data,
+        }
+
+        await dispatcher.emit_startup(**workflow_data)
         await bot.set_webhook(
             url=WEBHOOK_URL,
             drop_pending_updates=True,
             secret_token=WEBHOOK_SECRET_TOKEN or None,
         )
 
-    async def on_shutdown(app: web.Application) -> None:
+        yield
+
         await bot.delete_webhook(drop_pending_updates=True)
+        await dispatcher.emit_shutdown(**workflow_data)
+        await bot.session.close()
 
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
+    app = FastAPI(lifespan=lifespan)
 
-    handler = SimpleRequestHandler(
-        dispatcher=dispatcher,
-        bot=bot,
-        secret_token=WEBHOOK_SECRET_TOKEN or None,
-    )
-    handler.register(app, path=WEBHOOK_PATH)
-    setup_application(app, dispatcher)
+    @app.post(WEBHOOK_PATH)
+    async def telegram_webhook(request: Request) -> JSONResponse:
+        if WEBHOOK_SECRET_TOKEN:
+            secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if not secrets.compare_digest(secret_token, WEBHOOK_SECRET_TOKEN):
+                raise HTTPException(status_code=401, detail="Unauthorized")
+
+        payload: dict[str, Any] = await request.json()
+        result = await dispatcher.feed_raw_update(bot=bot, update=payload)
+
+        if isinstance(result, TelegramMethod):
+            await dispatcher.silent_call_request(bot=bot, result=result)
+
+        return JSONResponse(content={})
 
     return app
 
 
 def run_webhook() -> None:
-    web.run_app(create_app(), host=WEBHOOK_HOST, port=WEBHOOK_PORT)
+    uvicorn.run(create_app(), host=WEBHOOK_HOST, port=WEBHOOK_PORT)
