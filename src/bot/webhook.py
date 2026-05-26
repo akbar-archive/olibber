@@ -19,11 +19,11 @@ WEBHOOK_PORT = int(os.getenv("TELEGRAM_WEBHOOK_PORT", "8000"))
 
 
 def create_app() -> FastAPI:
-    bot = create_bot()
-    dispatcher = create_dispatcher()
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        bot = create_bot()
+        dispatcher = create_dispatcher()
+
         if not WEBHOOK_URL:
             raise RuntimeError("TELEGRAM_WEBHOOK_URL is not set")
 
@@ -32,6 +32,9 @@ def create_app() -> FastAPI:
             "dispatcher": dispatcher,
             **dispatcher.workflow_data,
         }
+
+        app.state.bot = bot
+        app.state.dispatcher = dispatcher
 
         await dispatcher.emit_startup(**workflow_data)
         await bot.set_webhook(
@@ -50,6 +53,9 @@ def create_app() -> FastAPI:
 
     @app.post(WEBHOOK_PATH)
     async def telegram_webhook(request: Request) -> JSONResponse:
+        bot = request.app.state.bot
+        dispatcher = request.app.state.dispatcher
+
         if WEBHOOK_SECRET_TOKEN:
             secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
             if not secrets.compare_digest(secret_token, WEBHOOK_SECRET_TOKEN):

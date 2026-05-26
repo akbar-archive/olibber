@@ -1,7 +1,11 @@
 import logging
 import sys
 
+from src.bot.webhook import create_app
 from src.bot.run import run_bot
+
+
+app = create_app()
 
 
 def main() -> None:
