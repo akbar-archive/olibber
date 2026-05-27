@@ -7,7 +7,6 @@ from src.config.settings import USER_COOLDOWN_SECONDS
 class _UserJobState:
     task: asyncio.Task | None = None
     busy: bool = False
-    cooldown_until: float = 0.0
     pending_url: str | None = None
     last_download_time: float = 0.0
     waiting_message_id: int | None = None
@@ -25,13 +24,6 @@ class UserJobController:
             if state.busy:
                 return False, -1
 
-            now = time.monotonic()
-            if now < state.cooldown_until:
-                remaining = int(state.cooldown_until - now)
-                if state.cooldown_until - now > remaining:
-                    remaining += 1
-                return False, max(1, remaining)
-
             state.busy = True
             state.task = None
             return True, 0
@@ -46,7 +38,6 @@ class UserJobController:
             state = self._states.setdefault(user_id, _UserJobState())
             state.busy = False
             state.task = None
-            state.cooldown_until = time.monotonic() + USER_COOLDOWN_SECONDS
 
     async def set_pending_url(self, user_id: int, url: str):
         async with self._lock:
@@ -67,7 +58,6 @@ class UserJobController:
                 state = self._states.setdefault(user_id, _UserJobState())
                 state.busy = False
                 state.task = None
-                state.cooldown_until = time.monotonic() + USER_COOLDOWN_SECONDS
 
     async def wait_for_download_cooldown(self, user_id: int) -> None:
         """Wait for the 5-second download cooldown before allowing the next request."""
