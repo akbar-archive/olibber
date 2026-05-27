@@ -41,15 +41,6 @@ async def handle_link(message: types.Message):
             await message.answer("Men hozir sizning so'rovingiz bilan bandman")
         return
 
-    if platform.name == "instagram":
-        can_proceed_ig, remaining_ig = await job_controller.acquire_instagram_request(user_id)
-        if not can_proceed_ig:
-            await message.answer(
-                f"Instagram so'rovlari uchun {remaining_ig} soniyadan keyin qayta urinib ko'ring"
-            )
-            await job_controller.release(user_id)
-            return
-
     # Send waiting message immediately for all link types
     status_msg = await message.answer(get_random_phrase())
     await job_controller.set_waiting_message(user_id, status_msg.message_id)

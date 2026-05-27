@@ -19,6 +19,7 @@ WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL")
 WEBHOOK_SECRET_TOKEN = os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN")
 WEBHOOK_HOST = os.getenv("TELEGRAM_WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("TELEGRAM_WEBHOOK_PORT", "8000"))
+MANAGE_TELEGRAM_WEBHOOK = os.getenv("MANAGE_TELEGRAM_WEBHOOK", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _build_webhook_url(base_url: str, path: str) -> str:
@@ -51,15 +52,20 @@ def create_app() -> FastAPI:
         app.state.processed_update_lock = asyncio.Lock()
 
         await dispatcher.emit_startup(**workflow_data)
-        await bot.set_webhook(
-            url=_build_webhook_url(WEBHOOK_URL, WEBHOOK_PATH),
-            drop_pending_updates=True,
-            secret_token=WEBHOOK_SECRET_TOKEN or None,
-        )
+
+        should_manage_webhook = MANAGE_TELEGRAM_WEBHOOK and not os.getenv("VERCEL")
+
+        if should_manage_webhook:
+            await bot.set_webhook(
+                url=_build_webhook_url(WEBHOOK_URL, WEBHOOK_PATH),
+                drop_pending_updates=True,
+                secret_token=WEBHOOK_SECRET_TOKEN or None,
+            )
 
         yield
 
-        await bot.delete_webhook(drop_pending_updates=True)
+        if should_manage_webhook:
+            await bot.delete_webhook(drop_pending_updates=True)
         await dispatcher.emit_shutdown(**workflow_data)
         await bot.session.close()
 
