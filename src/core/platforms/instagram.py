@@ -1,5 +1,8 @@
-import re
 import asyncio
+import base64
+import os
+import re
+import tempfile
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -14,7 +17,12 @@ from src.core.platforms.base import (
     InfoDict,
     MediaItem
 )
-from src.config.settings import MAX_VIDEO_SIZE_BYTES
+from src.config.settings import (
+    INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
+    INSTAGRAM_USERNAME,
+    INSTALOADER_SESSION_B64,
+    MAX_VIDEO_SIZE_BYTES,
+)
 
 
 class InstagramLinkChecker(AbstractLinkChecker):
@@ -36,6 +44,11 @@ class InstagramDownloader(AbstractVideoDownloader):
     ):
         self.video_limit_bytes = video_limit_bytes
         self._metadata_cache: dict[str, InfoDict] = {}
+        self._post_cache: dict[str, instaloader.Post] = {}
+        self._download_cache: dict[str, DownloadResult] = {}
+        self._cache_limit = 128
+        self._session_loaded = False
+        self._last_error: str | None = None
         self.loader = instaloader.Instaloader(
             quiet=True,
             download_pictures=False,
@@ -45,6 +58,50 @@ class InstagramDownloader(AbstractVideoDownloader):
             compress_json=False,
             request_timeout=60.0,
         )
+        if INSTALOADER_SESSION_B64 and INSTAGRAM_USERNAME:
+            self._load_session_from_env()
+
+    def _trim_cache(self, cache: dict) -> None:
+        while len(cache) > self._cache_limit:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+
+    @staticmethod
+    def _safe_video_url_from_node(node: dict | None) -> str | None:
+        if not node:
+            return None
+        return node.get("video_url") or node.get("display_url")
+
+    def _safe_video_url(self, post: instaloader.Post) -> str | None:
+        node = getattr(post, "_node", None)
+        if isinstance(node, dict):
+            video_url = node.get("video_url")
+            if video_url:
+                return video_url
+        try:
+            return post.video_url
+        except Exception:
+            return None
+
+    def _load_session_from_env(self) -> None:
+        try:
+            decoded = base64.b64decode(INSTALOADER_SESSION_B64)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".session")
+            try:
+                temp_file.write(decoded)
+                temp_file.flush()
+                temp_file.close()
+                self.loader.load_session_from_file(INSTAGRAM_USERNAME, filename=temp_file.name)
+                self._session_loaded = True
+                self._last_error = None
+            finally:
+                try:
+                    os.unlink(temp_file.name)
+                except Exception:
+                    pass
+        except Exception as exc:
+            self._last_error = str(exc)
+            print("Failed to load Instagram session:", exc)
 
     @staticmethod
     def _content_length(url: str) -> int | None:
@@ -137,7 +194,7 @@ class InstagramDownloader(AbstractVideoDownloader):
                 duration_raw = node.get("video_duration")
             else:
                 is_video = post.is_video
-                media_url = post.video_url if is_video else post.url
+                media_url = self._safe_video_url(post) if is_video else post.url
                 duration_raw = post.video_duration
 
             if not media_url:
@@ -165,8 +222,9 @@ class InstagramDownloader(AbstractVideoDownloader):
         filesize_approx = None
         if post.is_video:
             view_count = post.video_view_count or post.video_play_count
-            if post.video_url:
-                filesize_approx = self._content_length(post.video_url)
+            video_url = self._safe_video_url(post)
+            if video_url:
+                filesize_approx = self._content_length(video_url)
 
         return {
             "id": shortcode,
@@ -182,9 +240,20 @@ class InstagramDownloader(AbstractVideoDownloader):
             "thumbnail": post.url
         }
 
+    def _require_session(self) -> bool:
+        if self._session_loaded:
+            return True
+
+        self._last_error = "Instagram session is not configured. Set INSTALOADER_SESSION_B64 and INSTAGRAM_USERNAME."
+        print(self._last_error)
+        return False
+
     async def fetch_metadata(self, url: str) -> InfoDict | None:
         if url in self._metadata_cache:
             return self._metadata_cache[url]
+
+        if not self._require_session():
+            return None
 
         if "/stories/" in url:
             username, _ = self._extract_story_parts(url)
@@ -209,8 +278,10 @@ class InstagramDownloader(AbstractVideoDownloader):
         def _fetch():
             try:
                 post = instaloader.Post.from_shortcode(self.loader.context, shortcode)
+                self._last_error = None
                 return self._build_metadata_from_post(post, shortcode)
             except Exception as exc:
+                self._last_error = str(exc)
                 print("Metadata fetch failed:", exc)
                 return None
 
@@ -219,9 +290,21 @@ class InstagramDownloader(AbstractVideoDownloader):
             self._metadata_cache[url] = info
         return info
 
-    async def download_media(self, url: str, format_id: str | None = None) -> DownloadResult:
-        metadata = await self.fetch_metadata(url)
+    async def download_media(
+        self,
+        url: str,
+        format_id: str | None = None,
+        metadata: InfoDict | None = None,
+    ) -> DownloadResult:
+        cache_key = f"{url}:{format_id or ''}"
+        if cache_key in self._download_cache:
+            return self._download_cache[cache_key]
+
+        metadata = metadata or await self.fetch_metadata(url)
         if not metadata:
+            return DownloadResult(media_items=[], info=None)
+
+        if not self._require_session():
             return DownloadResult(media_items=[], info=None)
 
         def _resolve():
@@ -230,17 +313,31 @@ class InstagramDownloader(AbstractVideoDownloader):
                     return self._download_story_url(url)
                 return self._download_post_url(url)
             except Exception as exc:
+                self._last_error = str(exc)
                 print("Download failed:", exc)
                 return DownloadResult(media_items=[], info=None)
 
-        return await asyncio.to_thread(_resolve)
+        result = await asyncio.to_thread(_resolve)
+        if result.media_items:
+            self._download_cache[cache_key] = result
+            self._trim_cache(self._download_cache)
+        return result
 
     def _download_post_url(self, url: str) -> DownloadResult:
         shortcode = self._extract_shortcode(url)
         if not shortcode:
             return DownloadResult(media_items=[], info=None)
 
-        post = instaloader.Post.from_shortcode(self.loader.context, shortcode)
+        post = self._post_cache.get(shortcode)
+        if post is None:
+            try:
+                post = instaloader.Post.from_shortcode(self.loader.context, shortcode)
+                self._last_error = None
+            except Exception as exc:
+                self._last_error = str(exc)
+                raise
+            self._post_cache[shortcode] = post
+            self._trim_cache(self._post_cache)
         try:
             media_items = self._build_post_media(post)
         except Exception:
@@ -263,7 +360,13 @@ class InstagramDownloader(AbstractVideoDownloader):
                     continue
 
                 is_video = item.is_video
-                media_url = item.video_url if is_video else item.url
+                item_node = getattr(item, "_node", {}) or {}
+                media_url = item_node.get("video_url") if is_video else item.url
+                if is_video and not media_url:
+                    try:
+                        media_url = item.video_url
+                    except Exception:
+                        media_url = item.url
                 
                 width, height = self._extract_dimensions(getattr(item, "_node", {}))
                 media_items.append(

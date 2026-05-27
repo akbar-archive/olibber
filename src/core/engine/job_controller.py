@@ -1,13 +1,14 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from src.config.settings import USER_COOLDOWN_SECONDS
+from src.config.settings import USER_COOLDOWN_SECONDS, INSTAGRAM_USER_COOLDOWN_SECONDS
 
 @dataclass
 class _UserJobState:
     task: asyncio.Task | None = None
     busy: bool = False
     cooldown_until: float = 0.0
+    instagram_cooldown_until: float = 0.0
     pending_url: str | None = None
     last_download_time: float = 0.0
     waiting_message_id: int | None = None
@@ -89,6 +90,20 @@ class UserJobController:
         async with self._lock:
             state = self._states.setdefault(user_id, _UserJobState())
             state.last_download_time = time.monotonic()
+
+    async def acquire_instagram_request(self, user_id: int) -> tuple[bool, int]:
+        async with self._lock:
+            state = self._states.setdefault(user_id, _UserJobState())
+            now = time.monotonic()
+
+            if now < state.instagram_cooldown_until:
+                remaining = int(state.instagram_cooldown_until - now)
+                if state.instagram_cooldown_until - now > remaining:
+                    remaining += 1
+                return False, max(1, remaining)
+
+            state.instagram_cooldown_until = now + INSTAGRAM_USER_COOLDOWN_SECONDS
+            return True, 0
 
     async def set_waiting_message(self, user_id: int, message_id: int):
         async with self._lock:

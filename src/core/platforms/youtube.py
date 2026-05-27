@@ -114,8 +114,13 @@ class YouTubeDownloader(AbstractVideoDownloader):
             self._metadata_cache[url] = enriched
         return enriched
 
-    async def download_media(self, url: str, format_id: str | None = None) -> DownloadResult:
-        metadata = await self.fetch_metadata(url)
+    async def download_media(
+        self,
+        url: str,
+        format_id: str | None = None,
+        metadata: InfoDict | None = None,
+    ) -> DownloadResult:
+        metadata = metadata or await self.fetch_metadata(url)
         if not metadata:
             return DownloadResult(media_items=[], info=None)
 

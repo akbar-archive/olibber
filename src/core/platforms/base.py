@@ -49,7 +49,12 @@ class AbstractVideoDownloader(ABC):
         pass
 
     @abstractmethod
-    async def download_media(self, url: str, format_id: str | None = None) -> DownloadResult:
+    async def download_media(
+        self,
+        url: str,
+        format_id: str | None = None,
+        metadata: InfoDict | None = None,
+    ) -> DownloadResult:
         pass
 
 

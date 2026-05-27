@@ -22,8 +22,8 @@ class VideoManager:
             return None
         return self.formatter.build_summary(self.info)
 
-    async def download_media(self, format_id: str | None = None):
-        result = await self.downloader.download_media(self.url, format_id)
+    async def download_media(self, format_id: str | None = None, metadata=None):
+        result = await self.downloader.download_media(self.url, format_id, metadata=metadata or self.info)
         return result.media_items
 
     async def process(self, format_id: str | None = None):
