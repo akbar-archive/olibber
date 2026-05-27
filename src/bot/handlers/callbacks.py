@@ -1,4 +1,6 @@
 from aiogram import types, F
+from aiogram.exceptions import TelegramBadRequest
+import traceback
 from src.core.engine.job_controller import job_controller
 from src.core.engine.registry import resolve_platform
 from src.core.engine.manager import VideoManager
@@ -44,7 +46,6 @@ async def handle_callback(callback: types.CallbackQuery):
     await job_controller.wait_for_download_cooldown(user_id)
 
     try:
-        metadata = await manager.fetch_metadata()
         media_items = await manager.download_media(format_id=format_id)
 
         sender = TelegramUploadSender(
@@ -61,10 +62,22 @@ async def handle_callback(callback: types.CallbackQuery):
 
     except Exception as e:
         print(f"Callback error: {e}")
+        traceback.print_exc()
+        instagram_error = getattr(manager.downloader, "_last_error", None)
         try:
-            await waiting_msg.edit_text("❌ Yuklab olish muvaffaqiyatsiz tugadi.")
+            message_text = "❌ Yuklab olish muvaffaqiyatsiz tugadi."
+            if instagram_error:
+                message_text = f"{message_text}\n\n{instagram_error}"
+            await waiting_msg.edit_text(message_text)
         except Exception:
-            await callback.message.edit_text("❌ Yuklab olish muvaffaqiyatsiz tugadi.")
+            fallback_text = "❌ Yuklab olish muvaffaqiyatsiz tugadi."
+            if instagram_error:
+                fallback_text = f"{fallback_text}\n\n{instagram_error}"
+            await callback.message.edit_text(fallback_text)
         await job_controller.release(user_id)
 
-    await callback.answer()
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        # callback query may be too old or already answered; ignore to avoid crashing
+        pass

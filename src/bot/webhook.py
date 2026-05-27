@@ -1,7 +1,10 @@
 import os
 import secrets
+import asyncio
 from contextlib import asynccontextmanager
+from collections import deque
 from typing import Any
+from urllib.parse import urlparse
 
 import uvicorn
 from aiogram.methods.base import TelegramMethod
@@ -11,11 +14,19 @@ from fastapi.responses import JSONResponse
 from src.bot.app import create_bot, create_dispatcher
 
 
-WEBHOOK_PATH = os.getenv("TELEGRAM_WEBHOOK_PATH", "/telegram/webhook")
+WEBHOOK_PATH = os.getenv("TELEGRAM_WEBHOOK_PATH", "/webhook")
 WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL")
 WEBHOOK_SECRET_TOKEN = os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN")
 WEBHOOK_HOST = os.getenv("TELEGRAM_WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("TELEGRAM_WEBHOOK_PORT", "8000"))
+
+
+def _build_webhook_url(base_url: str, path: str) -> str:
+    parsed_url = urlparse(base_url)
+    if parsed_url.path and parsed_url.path != "/":
+        return base_url.rstrip("/")
+
+    return base_url.rstrip("/") + path
 
 
 def create_app() -> FastAPI:
@@ -35,10 +46,13 @@ def create_app() -> FastAPI:
 
         app.state.bot = bot
         app.state.dispatcher = dispatcher
+        app.state.processed_update_ids = set()
+        app.state.processed_update_order = deque()
+        app.state.processed_update_lock = asyncio.Lock()
 
         await dispatcher.emit_startup(**workflow_data)
         await bot.set_webhook(
-            url=WEBHOOK_URL,
+            url=_build_webhook_url(WEBHOOK_URL, WEBHOOK_PATH),
             drop_pending_updates=True,
             secret_token=WEBHOOK_SECRET_TOKEN or None,
         )
@@ -55,13 +69,29 @@ def create_app() -> FastAPI:
     async def telegram_webhook(request: Request) -> JSONResponse:
         bot = request.app.state.bot
         dispatcher = request.app.state.dispatcher
+        payload: dict[str, Any] = await request.json()
+
+        update_id = payload.get("update_id")
+        if isinstance(update_id, int):
+            async with request.app.state.processed_update_lock:
+                processed_update_ids: set[int] = request.app.state.processed_update_ids
+                processed_update_order: deque[int] = request.app.state.processed_update_order
+
+                if update_id in processed_update_ids:
+                    return JSONResponse(content={})
+
+                processed_update_ids.add(update_id)
+                processed_update_order.append(update_id)
+
+                while len(processed_update_order) > 1000:
+                    oldest_update_id = processed_update_order.popleft()
+                    processed_update_ids.discard(oldest_update_id)
 
         if WEBHOOK_SECRET_TOKEN:
             secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
             if not secrets.compare_digest(secret_token, WEBHOOK_SECRET_TOKEN):
                 raise HTTPException(status_code=401, detail="Unauthorized")
 
-        payload: dict[str, Any] = await request.json()
         result = await dispatcher.feed_raw_update(bot=bot, update=payload)
 
         if isinstance(result, TelegramMethod):

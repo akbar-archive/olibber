@@ -1,10 +1,16 @@
 from aiogram import types
+import traceback
 from src.core.engine.registry import resolve_platform
 from src.core.engine.manager import VideoManager
 from src.core.engine.job_controller import job_controller
 from src.bot.keyboards.builder import build_format_keyboard
 from src.config.phrases import get_random_phrase
-from src.config.settings import DEFAULT_CAPTION, TELEGRAM_UPLOAD_TIMEOUT_SECONDS, TELEGRAM_MEDIA_GROUP_LIMIT
+from src.config.settings import (
+    DEFAULT_CAPTION,
+    TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
+    TELEGRAM_MEDIA_GROUP_LIMIT,
+    INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
+)
 from src.core.uploaders.telegram import TelegramUploadSender
 from src.core.platforms.base import MediaItem
 
@@ -35,6 +41,15 @@ async def handle_link(message: types.Message):
             await message.answer("Men hozir sizning so'rovingiz bilan bandman")
         return
 
+    if platform.name == "instagram":
+        can_proceed_ig, remaining_ig = await job_controller.acquire_instagram_request(user_id)
+        if not can_proceed_ig:
+            await message.answer(
+                f"Instagram so'rovlari uchun {remaining_ig} soniyadan keyin qayta urinib ko'ring"
+            )
+            await job_controller.release(user_id)
+            return
+
     # Send waiting message immediately for all link types
     status_msg = await message.answer(get_random_phrase())
     await job_controller.set_waiting_message(user_id, status_msg.message_id)
@@ -45,7 +60,10 @@ async def handle_link(message: types.Message):
     try:
         metadata = await manager.fetch_metadata()
         if not metadata:
-            await status_msg.edit_text("❌ Metama'lumotlarni olishning imkoni bo'lmadi.")
+            if platform.name == "instagram":
+                await status_msg.edit_text(INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE)
+            else:
+                await status_msg.edit_text("❌ Metama'lumotlarni olishning imkoni bo'lmadi.")
             await job_controller.release(user_id)
             return
 
@@ -66,7 +84,7 @@ async def handle_link(message: types.Message):
             # Auto-download for Instagram/others
             # Wait for 5-second cooldown between downloads
             await job_controller.wait_for_download_cooldown(user_id)
-            media_items = await manager.download_media()
+            media_items = await manager.download_media(metadata=metadata)
             
             sender = TelegramUploadSender(
                 message=message,
@@ -84,5 +102,13 @@ async def handle_link(message: types.Message):
 
     except Exception as e:
         print(f"Error handling link: {e}")
-        await status_msg.edit_text("❌ Kutilmagan xatolik yuz berdi.")
+        traceback.print_exc()
+        instagram_error = getattr(manager.downloader, "_last_error", None)
+        if platform.name == "instagram":
+            message_text = INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE
+            if instagram_error:
+                message_text = f"{message_text}\n\n{instagram_error}"
+            await status_msg.edit_text(message_text)
+        else:
+            await status_msg.edit_text("❌ Kutilmagan xatolik yuz berdi.")
         await job_controller.release(user_id)
