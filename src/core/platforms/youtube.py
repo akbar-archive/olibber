@@ -3,6 +3,7 @@ import asyncio
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
+from aiogram.types import URLInputFile
 
 from src.core.platforms.base import (
     AbstractLinkChecker,
@@ -50,6 +51,19 @@ class YouTubeDownloader(AbstractVideoDownloader):
     def __init__(self, video_limit_bytes: int = MAX_VIDEO_SIZE_BYTES):
         self.video_limit_bytes = video_limit_bytes
         self._metadata_cache: dict[str, InfoDict] = {}
+        self._raw_info_cache: dict[str, dict] = {}
+        self._ydl_opts = {
+            "skip_download": True,
+            "noplaylist": True,
+            "ignoreconfig": True,
+            "quiet": True,
+            "no_warnings": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                }
+            },
+        }
 
     @staticmethod
     def _enrich_info(info: InfoDict) -> InfoDict:
@@ -94,16 +108,11 @@ class YouTubeDownloader(AbstractVideoDownloader):
         if url in self._metadata_cache:
             return self._metadata_cache[url]
 
-        ydl_opts = {
-            "skip_download": True,
-            "noplaylist": True,
-            "ignoreconfig": True,
-        }
-
         def _fetch():
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                with yt_dlp.YoutubeDL(self._ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
+                self._raw_info_cache[url] = info
                 return self._enrich_info(info)
             except Exception as exc:
                 print("Metadata fetch failed:", exc)
@@ -124,24 +133,29 @@ class YouTubeDownloader(AbstractVideoDownloader):
         if not metadata:
             return DownloadResult(media_items=[], info=None)
 
-        if not format_id:
-            format_id = "best"
+        raw_info = self._raw_info_cache.get(url)
+        if not raw_info:
+            try:
+                with yt_dlp.YoutubeDL(self._ydl_opts) as ydl:
+                    raw_info = ydl.extract_info(url, download=False)
+                self._raw_info_cache[url] = raw_info
+            except Exception as exc:
+                print("Download metadata refresh failed:", exc)
+                return DownloadResult(media_items=[], info=None)
 
-        # Check if format_id is audio-only
-        is_audio = False
-        if format_id != "best":
-            for f in metadata.get("extracted_formats", []):
-                if f.format_id == format_id and not f.is_video:
-                    is_audio = True
-                    break
+        selected_format = self._select_format(raw_info, metadata, format_id)
+        if not selected_format:
+            return DownloadResult(media_items=[], info=metadata)
 
-        # YouTube streaming
-        cmd = ["yt-dlp", "-f", format_id, "-o", "-", url]
-        stream = stream_subprocess(cmd)
-        
+        media_url = selected_format.get("url") or raw_info.get("url")
+        if not media_url:
+            return DownloadResult(media_items=[], info=metadata)
+
+        is_audio = selected_format.get("vcodec") == "none" and selected_format.get("acodec") != "none"
+
         media_item = MediaItem(
             kind="audio" if is_audio else "video",
-            stream=stream,
+            url=media_url,
             thumbnail_url=metadata.get("thumbnail"),
             width=metadata.get("width"),
             height=metadata.get("height"),
@@ -152,6 +166,32 @@ class YouTubeDownloader(AbstractVideoDownloader):
         )
         
         return DownloadResult(media_items=[media_item], info=metadata)
+
+    def _select_format(self, raw_info: dict, metadata: InfoDict, format_id: str | None) -> dict | None:
+        formats = raw_info.get("formats", [])
+        if not formats:
+            return None
+
+        if format_id and format_id != "best":
+            for fmt in formats:
+                if fmt.get("format_id") == format_id:
+                    return fmt
+
+        preferred = [
+            fmt for fmt in formats
+            if fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"
+        ]
+        if preferred:
+            return preferred[-1]
+
+        audio_only = [
+            fmt for fmt in formats
+            if fmt.get("vcodec") == "none" and fmt.get("acodec") != "none"
+        ]
+        if audio_only:
+            return audio_only[-1]
+
+        return formats[-1]
 
 
 class YouTubePlatform(AbstractPlatform):
