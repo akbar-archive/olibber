@@ -3,6 +3,8 @@ import base64
 import os
 import re
 import tempfile
+from pathlib import Path
+from typing import AsyncIterable
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -37,6 +39,8 @@ class InstagramLinkChecker(AbstractLinkChecker):
 
 
 class InstagramDownloader(AbstractVideoDownloader):
+    _video_extensions = {".mp4", ".m4v", ".mov", ".webm"}
+
     def __init__(
         self,
         video_limit_bytes: int = MAX_VIDEO_SIZE_BYTES,
@@ -217,6 +221,44 @@ class InstagramDownloader(AbstractVideoDownloader):
 
         return media_items
 
+    @staticmethod
+    def _find_downloaded_video_file(directory: str) -> str | None:
+        candidates: list[Path] = []
+        for root, _, files in os.walk(directory):
+            for file_name in files:
+                file_path = Path(root) / file_name
+                if file_path.suffix.lower() in InstagramDownloader._video_extensions:
+                    candidates.append(file_path)
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda path: path.stat().st_size, reverse=True)
+        return str(candidates[0])
+
+    @staticmethod
+    async def _stream_file(file_path: str, cleanup: tempfile.TemporaryDirectory[str]) -> AsyncIterable[bytes]:
+        try:
+            with open(file_path, "rb") as file_handle:
+                while True:
+                    chunk = file_handle.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            cleanup.cleanup()
+
+    def _download_post_to_temp_file(self, post: instaloader.Post) -> tuple[str | None, tempfile.TemporaryDirectory[str]]:
+        temp_dir = tempfile.TemporaryDirectory()
+
+        try:
+            self.loader.download_post(post, target=temp_dir.name)
+        except Exception:
+            temp_dir.cleanup()
+            raise
+
+        return self._find_downloaded_video_file(temp_dir.name), temp_dir
+
     def _build_metadata_from_post(self, post: instaloader.Post, shortcode: str) -> InfoDict:
         view_count = None
         filesize_approx = None
@@ -342,6 +384,28 @@ class InstagramDownloader(AbstractVideoDownloader):
             media_items = self._build_post_media(post)
         except Exception:
             media_items = []
+
+        if not media_items and post.is_video:
+            try:
+                video_path, cleanup = self._download_post_to_temp_file(post)
+                if video_path:
+                    media_items = [
+                        MediaItem(
+                            kind="video",
+                            stream=self._stream_file(video_path, cleanup),
+                            thumbnail_url=post.url,
+                            width=getattr(post, "video_width", None),
+                            height=getattr(post, "video_height", None),
+                            duration=int(round(float(post.video_duration))) if post.video_duration else None,
+                            title=f"Instagram - {post.shortcode}",
+                            author=post.owner_username,
+                        )
+                    ]
+                else:
+                    cleanup.cleanup()
+            except Exception as exc:
+                self._last_error = str(exc)
+                print("Instagram video fallback failed:", exc)
 
         info = self._metadata_cache.get(url) or self._build_metadata_from_post(post, shortcode)
         return DownloadResult(media_items=media_items, info=info)
