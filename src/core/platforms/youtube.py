@@ -3,7 +3,6 @@ import asyncio
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
-from aiogram.types import URLInputFile
 
 from src.core.platforms.base import (
     AbstractLinkChecker,
@@ -60,7 +59,7 @@ class YouTubeDownloader(AbstractVideoDownloader):
             "no_warnings": True,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web"],
+                    "player_client": ["android"],
                 }
             },
         }
@@ -109,14 +108,18 @@ class YouTubeDownloader(AbstractVideoDownloader):
             return self._metadata_cache[url]
 
         def _fetch():
-            try:
-                with yt_dlp.YoutubeDL(self._ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                self._raw_info_cache[url] = info
-                return self._enrich_info(info)
-            except Exception as exc:
-                print("Metadata fetch failed:", exc)
-                return None
+            last_exc: Exception | None = None
+            for _ in range(3):
+                try:
+                    with yt_dlp.YoutubeDL(self._ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                    self._raw_info_cache[url] = info
+                    return self._enrich_info(info)
+                except Exception as exc:
+                    last_exc = exc
+            if last_exc:
+                print("Metadata fetch failed:", last_exc)
+            return None
 
         enriched = await asyncio.to_thread(_fetch)
         if enriched:
