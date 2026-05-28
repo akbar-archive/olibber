@@ -26,6 +26,8 @@ async def handle_callback(callback: types.CallbackQuery):
 
     platform = resolve_platform(url)
     manager = VideoManager(url, platform)
+    is_private_chat = callback.message and callback.message.chat.type == "private"
+    waiting_msg: types.Message | None = None
     
     # Check if user is already processing a request
     can_proceed, remaining = await job_controller.acquire(user_id)
@@ -38,26 +40,40 @@ async def handle_callback(callback: types.CallbackQuery):
         await callback.answer()
         return
     
-    # Wait for 5-second cooldown between downloads
-    # send a waiting message early so we can update it on error
-    waiting_msg = await callback.message.answer(get_random_phrase())
-    await job_controller.set_waiting_message(user_id, waiting_msg.message_id)
+    if is_private_chat:
+        # Wait for 5-second cooldown between downloads
+        # send a waiting message early so we can update it on error
+        waiting_msg = await callback.message.answer(get_random_phrase())
+        await job_controller.set_waiting_message(user_id, waiting_msg.message_id)
 
     await job_controller.wait_for_download_cooldown(user_id)
 
     try:
         media_items = await manager.download_media(format_id=format_id)
 
+        metadata = manager.info or await manager.fetch_metadata()
+        summary = manager.formatter.build_summary(metadata) if metadata else None
+        caption = DEFAULT_CAPTION
+        if not is_private_chat and metadata:
+            caption = summary or DEFAULT_CAPTION
+
         sender = TelegramUploadSender(
             message=callback.message,
             status_message=callback.message,
-            caption=DEFAULT_CAPTION,
+            caption=caption,
             request_timeout=TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
-            media_group_limit=TELEGRAM_MEDIA_GROUP_LIMIT
+            media_group_limit=TELEGRAM_MEDIA_GROUP_LIMIT,
+            reply_to_message_id=None if is_private_chat else callback.message.message_id,
         )
 
         await sender.send(media_items)
-        await waiting_msg.delete()
+        if is_private_chat and summary:
+            await callback.message.answer(
+                summary,
+                disable_web_page_preview=True,
+            )
+        if waiting_msg:
+            await waiting_msg.delete()
         await job_controller.release(user_id)
 
     except Exception as e:
@@ -68,7 +84,10 @@ async def handle_callback(callback: types.CallbackQuery):
             message_text = "❌ Yuklab olish muvaffaqiyatsiz tugadi."
             if instagram_error:
                 message_text = f"{message_text}\n\n{instagram_error}"
-            await waiting_msg.edit_text(message_text)
+            if waiting_msg:
+                await waiting_msg.edit_text(message_text)
+            else:
+                await callback.message.edit_text(message_text)
         except Exception:
             fallback_text = "❌ Yuklab olish muvaffaqiyatsiz tugadi."
             if instagram_error:
