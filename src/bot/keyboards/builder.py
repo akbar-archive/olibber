@@ -22,7 +22,7 @@ def build_format_keyboard(media_item: MediaItem, url: str) -> InlineKeyboardMark
     # Add Audio Formats (best one)
     best_audio = next((f for f in formats if not f.is_video), None)
     if best_audio:
-        builder.button(text="🎵 Audio (MP3)", callback_data=f"dl:a:{best_audio.format_id}")
+        builder.button(text="🎵 Ovoz (MP3)", callback_data=f"dl:a:{best_audio.format_id}")
     
     builder.adjust(1)
     return builder.as_markup()

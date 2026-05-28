@@ -9,16 +9,18 @@ class TelegramUploadSender:
     def __init__(
         self,
         message: Message,
-        status_message: Message,
-        caption: str,
+        status_message: Message | None,
+        caption: str | None,
         request_timeout: int,
         media_group_limit: int,
+        reply_to_message_id: int | None = None,
     ):
         self._message = message
         self._status_message = status_message
         self._caption = caption
         self._request_timeout = request_timeout
         self._media_group_limit = media_group_limit
+        self._reply_to_message_id = reply_to_message_id
 
     async def send(self, media_items: list[MediaItem]) -> Message:
         chunks = list(self._iter_chunks(media_items))
@@ -38,6 +40,7 @@ class TelegramUploadSender:
             await self._message.answer_media_group(
                 media=media_group,
                 request_timeout=self._request_timeout,
+                reply_to_message_id=self._reply_to_message_id,
             )
 
         return self._status_message
@@ -50,6 +53,7 @@ class TelegramUploadSender:
                 photo=media_input,
                 caption=self._caption,
                 request_timeout=self._request_timeout,
+                reply_to_message_id=self._reply_to_message_id,
             )
         
         if item.kind == "audio":
@@ -61,6 +65,7 @@ class TelegramUploadSender:
                 duration=item.duration,
                 thumbnail=URLInputFile(item.thumbnail_url) if item.thumbnail_url else None,
                 request_timeout=self._request_timeout,
+                     reply_to_message_id=self._reply_to_message_id,
             )
 
         return await self._message.answer_video(
@@ -72,6 +77,7 @@ class TelegramUploadSender:
             duration=item.duration,
             thumbnail=URLInputFile(item.thumbnail_url) if item.thumbnail_url else None,
             request_timeout=self._request_timeout,
+            reply_to_message_id=self._reply_to_message_id,
         )
 
     def _to_telegram_media(

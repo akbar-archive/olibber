@@ -5,6 +5,7 @@ from aiogram.filters import Command, CommandStart
 
 from src.bot.handlers.callbacks import handle_callback
 from src.bot.handlers.commands import handle_help, handle_start
+from src.bot.handlers.group_membership import handle_my_chat_member
 from src.bot.handlers.inline import handle_inline
 from src.bot.handlers.messages import handle_link
 from src.config.settings import TOKEN
@@ -25,5 +26,6 @@ def create_dispatcher() -> Dispatcher:
     dispatcher.message.register(handle_link, F.text.regexp(r"https?://"))
     dispatcher.callback_query.register(handle_callback)
     dispatcher.inline_query.register(handle_inline)
+    dispatcher.my_chat_member.register(handle_my_chat_member)
 
     return dispatcher

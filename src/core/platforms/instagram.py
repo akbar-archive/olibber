@@ -104,7 +104,7 @@ class InstagramDownloader(AbstractVideoDownloader):
                 except Exception:
                     pass
         except Exception as exc:
-            self._last_error = str(exc)
+            self._last_error = f"Instagram sessiyasini yuklab bo'lmadi: {exc}"
             print("Failed to load Instagram session:", exc)
 
     @staticmethod
@@ -286,7 +286,7 @@ class InstagramDownloader(AbstractVideoDownloader):
         if self._session_loaded:
             return True
 
-        self._last_error = "Instagram session is not configured. Set INSTALOADER_SESSION_B64 and INSTAGRAM_USERNAME."
+        self._last_error = "Instagram sessiyasi sozlanmagan. INSTALOADER_SESSION_B64 va INSTAGRAM_USERNAME ni belgilang."
         print(self._last_error)
         return False
 
