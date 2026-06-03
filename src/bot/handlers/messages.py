@@ -5,7 +5,6 @@ import traceback
 from src.core.engine.registry import resolve_platform
 from src.core.engine.manager import VideoManager
 from src.core.engine.job_controller import job_controller
-from src.bot.keyboards.builder import build_format_keyboard
 from src.config.phrases import get_random_phrase
 from src.config.settings import (
     DEFAULT_CAPTION,
@@ -15,9 +14,6 @@ from src.config.settings import (
     INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
 )
 from src.core.uploaders.telegram import TelegramUploadSender
-from src.core.platforms.base import MediaItem
-
-import asyncio
 
 
 _GROUP_INSTAGRAM_LINK_ONLY_PATTERN = re.compile(
@@ -119,55 +115,40 @@ async def handle_link(message: types.Message, bot: Bot):
             return
 
         summary = manager.formatter.build_summary(metadata)
-        
-        # Determine if we should show quality selection (e.g., YouTube only)
-        if platform.name == "youtube" and metadata.get("extracted_formats"):
-            temp_item = MediaItem(kind="video", formats=metadata.get("extracted_formats", []))
-            keyboard = build_format_keyboard(temp_item, url)
-            
-            if status_msg:
-                await status_msg.delete()
-            if track_user_job:
-                await job_controller.release(user_id)
+
+        # Auto-download for supported platforms.
+        if track_user_job:
+            await job_controller.wait_for_download_cooldown(user_id)
+        if is_group_chat:
+            media_items = await manager.download_media(metadata={})
+            caption = None
+        else:
+            media_items = await manager.download_media(metadata=metadata)
+            caption = DEFAULT_CAPTION
+            if platform.name == "instagram":
+                caption_builder = getattr(manager.formatter, "build_caption", None)
+                if callable(caption_builder):
+                    caption_builder(metadata)
+
+        sender = TelegramUploadSender(
+            message=message,
+            status_message=status_msg,
+            caption=caption,
+            request_timeout=TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
+            media_group_limit=TELEGRAM_MEDIA_GROUP_LIMIT,
+            reply_to_message_id=None if not is_group_chat else message.message_id,
+        )
+        await sender.send(media_items)
+        if wait_for_response and summary:
             await message.answer(
                 summary,
-                reply_markup=keyboard
+                disable_web_page_preview=True,
             )
-        else:
-            # Auto-download for Instagram/others
-            # Wait for 5-second cooldown between downloads
-            if track_user_job:
-                await job_controller.wait_for_download_cooldown(user_id)
-            if is_group_chat:
-                media_items = await manager.download_media(metadata={})
-                caption = None
-            else:
-                media_items = await manager.download_media(metadata=metadata)
-                caption = DEFAULT_CAPTION
-                if platform.name == "instagram":
-                    caption_builder = getattr(manager.formatter, "build_caption", None)
-                    if callable(caption_builder):
-                        caption_builder(metadata)
-            
-            sender = TelegramUploadSender(
-                message=message,
-                status_message=status_msg,
-                caption=caption,
-                request_timeout=TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
-                media_group_limit=TELEGRAM_MEDIA_GROUP_LIMIT,
-                reply_to_message_id=None if not is_group_chat else message.message_id,
-            )
-            await sender.send(media_items)
-            if wait_for_response and summary:
-                await message.answer(
-                    summary,
-                    disable_web_page_preview=True,
-                )
-            if status_msg:
-                await status_msg.delete()
-            
-            if track_user_job:
-                await job_controller.release(user_id)
+        if status_msg:
+            await status_msg.delete()
+
+        if track_user_job:
+            await job_controller.release(user_id)
 
     except Exception as e:
         print(f"Error handling link: {e}")
