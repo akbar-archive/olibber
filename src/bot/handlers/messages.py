@@ -101,36 +101,61 @@ async def _send_log_copy(
 ) -> None:
     if source_message.chat.id == TARGET_GROUP_ID:
         return
-
+    # Build (kind, file_id) list preserving order
+    media_entries: list[tuple[str, str]] = []
     for sent_message in sent_messages:
         media_kind, file_id = _extract_sent_media_file_id(sent_message)
         if not media_kind or not file_id:
             continue
+        media_entries.append((media_kind, file_id))
 
-        caption = _build_log_caption(source_message, instagram_url)
+    if not media_entries:
+        return
 
-        if media_kind == "photo":
-            await bot.send_photo(
-                chat_id=TARGET_GROUP_ID,
-                photo=file_id,
-                caption=caption,
-                parse_mode=HTML_PARSE_MODE,
-            )
-        elif media_kind == "video":
-            await bot.send_video(
-                chat_id=TARGET_GROUP_ID,
-                video=file_id,
-                caption=caption,
-                parse_mode=HTML_PARSE_MODE,
-                supports_streaming=True,
-            )
-        elif media_kind == "audio":
-            await bot.send_audio(
-                chat_id=TARGET_GROUP_ID,
-                audio=file_id,
-                caption=caption,
-                parse_mode=HTML_PARSE_MODE,
-            )
+    caption = _build_log_caption(source_message, instagram_url)
+
+    # Send in chunks respecting TELEGRAM_MEDIA_GROUP_LIMIT
+    for start in range(0, len(media_entries), TELEGRAM_MEDIA_GROUP_LIMIT):
+        chunk = media_entries[start : start + TELEGRAM_MEDIA_GROUP_LIMIT]
+        # Single item: send as single message so Telegram treats it naturally
+        if len(chunk) == 1:
+            media_kind, file_id = chunk[0]
+            if media_kind == "photo":
+                await bot.send_photo(
+                    chat_id=TARGET_GROUP_ID,
+                    photo=file_id,
+                    caption=caption,
+                    parse_mode=HTML_PARSE_MODE,
+                )
+            elif media_kind == "video":
+                await bot.send_video(
+                    chat_id=TARGET_GROUP_ID,
+                    video=file_id,
+                    caption=caption,
+                    parse_mode=HTML_PARSE_MODE,
+                    supports_streaming=True,
+                )
+            elif media_kind == "audio":
+                await bot.send_audio(
+                    chat_id=TARGET_GROUP_ID,
+                    audio=file_id,
+                    caption=caption,
+                    parse_mode=HTML_PARSE_MODE,
+                )
+            continue
+
+        media_group: list[types.InputMedia] = []
+        for idx, (media_kind, file_id) in enumerate(chunk):
+            item_caption = caption if idx == 0 else None
+            if media_kind == "photo":
+                media_group.append(types.InputMediaPhoto(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE))
+            elif media_kind == "video":
+                media_group.append(types.InputMediaVideo(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE, supports_streaming=True))
+            elif media_kind == "audio":
+                media_group.append(types.InputMediaAudio(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE))
+
+        if media_group:
+            await bot.send_media_group(chat_id=TARGET_GROUP_ID, media=media_group)
 
 
 async def _send_log_error_copy(
