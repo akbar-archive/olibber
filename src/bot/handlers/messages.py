@@ -240,12 +240,6 @@ async def handle_link(message: types.Message, bot: Bot):
         else:
             media_items = await manager.download_media(metadata=metadata)
             caption = DEFAULT_CAPTION
-            if platform.name == "instagram":
-                caption_builder = getattr(manager.formatter, "build_caption", None)
-                if callable(caption_builder):
-                    maybe_caption = caption_builder(metadata)
-                    if maybe_caption:
-                        caption = maybe_caption
 
         if not media_items:
             raise RuntimeError("No media items returned")
