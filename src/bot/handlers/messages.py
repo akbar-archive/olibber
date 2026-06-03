@@ -16,6 +16,7 @@ from src.config.settings import (
     INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
 )
 from src.core.uploaders.telegram import TelegramUploadSender
+
 from src.constants.groups import (
     GROUP_CAPTION_IG_LABEL,
     GROUP_CAPTION_TITLE,
@@ -28,7 +29,6 @@ from src.constants.logging import (
     LOG_MEDIA_CAPTION_NAME_LABEL,
     LOG_MEDIA_CAPTION_USER_LABEL,
 )
- 
 _GROUP_INSTAGRAM_LINK_ONLY_PATTERN = re.compile(
     r"^https?://(?:www\.)?instagram\.com/\S+$",
     re.IGNORECASE,
@@ -229,9 +229,8 @@ async def handle_link(message: types.Message, bot: Bot):
             return
 
         summary = manager.formatter.build_summary(metadata)
-        
-        # Auto-download for Instagram/others
-        # Wait for 5-second cooldown between downloads
+
+        # Auto-download for supported platforms.
         if track_user_job:
             await job_controller.wait_for_download_cooldown(user_id)
 
@@ -244,11 +243,12 @@ async def handle_link(message: types.Message, bot: Bot):
             if platform.name == "instagram":
                 caption_builder = getattr(manager.formatter, "build_caption", None)
                 if callable(caption_builder):
-                    caption_builder(metadata)
+                    maybe_caption = caption_builder(metadata)
+                    if maybe_caption:
+                        caption = maybe_caption
 
         if not media_items:
             raise RuntimeError("No media items returned")
-
         sender = TelegramUploadSender(
             message=message,
             status_message=status_msg,
@@ -266,7 +266,6 @@ async def handle_link(message: types.Message, bot: Bot):
             )
         if status_msg:
             await status_msg.delete()
-        
         if track_user_job:
             await job_controller.release(user_id)
 
@@ -295,5 +294,6 @@ async def handle_link(message: types.Message, bot: Bot):
                         "❌ Kutilmagan xatolik yuz berdi.",
                         reply_to_message_id=message.message_id,
                     )
+
         if track_user_job:
             await job_controller.release(user_id)
