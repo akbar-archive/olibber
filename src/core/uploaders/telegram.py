@@ -2,6 +2,7 @@ import time
 from aiogram.types import InputMediaPhoto, InputMediaVideo, Message, URLInputFile, InputMediaAudio
 
 from src.core.platforms.base import MediaItem
+from src.constants.telegram import HTML_PARSE_MODE
 from src.utils.streaming import StreamingInputFile
 
 
@@ -22,12 +23,15 @@ class TelegramUploadSender:
         self._media_group_limit = media_group_limit
         self._reply_to_message_id = reply_to_message_id
 
-    async def send(self, media_items: list[MediaItem]) -> Message:
+    async def send(self, media_items: list[MediaItem]) -> list[Message]:
         chunks = list(self._iter_chunks(media_items))
+        sent_messages: list[Message] = []
 
-        for chunk in chunks:
+        for chunk_index, chunk in enumerate(chunks, start=1):
             if len(chunk) == 1:
-                await self._send_single(chunk[0])
+                sent_message = await self._send_single(chunk[0])
+                if sent_message:
+                    sent_messages.append(sent_message)
                 continue
 
             media_group = [
@@ -37,40 +41,46 @@ class TelegramUploadSender:
                 )
                 for index, item in enumerate(chunk)
             ]
-            await self._message.answer_media_group(
+            group_messages = await self._message.answer_media_group(
                 media=media_group,
                 request_timeout=self._request_timeout,
                 reply_to_message_id=self._reply_to_message_id,
             )
+            sent_messages.extend(group_messages)
 
-        return self._status_message
+        return sent_messages
 
     async def _send_single(self, item: MediaItem) -> Message | None:
         media_input = self._build_media_input(item)
 
         if item.kind == "photo":
-            return await self._message.answer_photo(
+            result = await self._message.answer_photo(
                 photo=media_input,
                 caption=self._caption,
+                parse_mode=HTML_PARSE_MODE,
                 request_timeout=self._request_timeout,
                 reply_to_message_id=self._reply_to_message_id,
             )
+            return result
         
         if item.kind == "audio":
-             return await self._message.answer_audio(
+             result = await self._message.answer_audio(
                 audio=media_input,
                 caption=self._caption,
                 title=item.title,
                 performer=item.author,
                 duration=item.duration,
                 thumbnail=URLInputFile(item.thumbnail_url) if item.thumbnail_url else None,
+                 parse_mode=HTML_PARSE_MODE,
                 request_timeout=self._request_timeout,
                      reply_to_message_id=self._reply_to_message_id,
             )
+             return result
 
-        return await self._message.answer_video(
+        result = await self._message.answer_video(
             video=media_input,
             caption=self._caption,
+            parse_mode=HTML_PARSE_MODE,
             supports_streaming=True,
             width=item.width,
             height=item.height,
@@ -79,6 +89,7 @@ class TelegramUploadSender:
             request_timeout=self._request_timeout,
             reply_to_message_id=self._reply_to_message_id,
         )
+        return result
 
     def _to_telegram_media(
         self,
@@ -88,12 +99,13 @@ class TelegramUploadSender:
         media_input = self._build_media_input(item)
 
         if item.kind == "photo":
-            return InputMediaPhoto(media=media_input, caption=caption)
+            return InputMediaPhoto(media=media_input, caption=caption, parse_mode=HTML_PARSE_MODE)
         
         if item.kind == "audio":
             return InputMediaAudio(
                 media=media_input, 
                 caption=caption, 
+                parse_mode=HTML_PARSE_MODE,
                 title=item.title, 
                 performer=item.author, 
                 duration=item.duration,
@@ -103,6 +115,7 @@ class TelegramUploadSender:
         return InputMediaVideo(
             media=media_input,
             caption=caption,
+            parse_mode=HTML_PARSE_MODE,
             supports_streaming=True,
             width=item.width,
             height=item.height,

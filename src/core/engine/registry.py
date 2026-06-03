@@ -1,9 +1,7 @@
-from src.core.platforms.youtube import YouTubePlatform
 from src.core.platforms.instagram import InstagramPlatform
 from src.core.platforms.base import AbstractPlatform
 
 _platforms: list[AbstractPlatform] = [
-    YouTubePlatform(),
     InstagramPlatform(),
 ]
 
