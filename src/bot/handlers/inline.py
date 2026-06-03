@@ -44,7 +44,7 @@ async def handle_inline(inline_query: types.InlineQuery):
         # to send a message that triggers the bot's own processing.
         
         # However, Telegram's InlineQueryResultVideo REQUIRES a direct video URL.
-        # Since we don't always have one (like YouTube), we'll send an article
+        # Since we don't always have one, we'll send an article
         # that, when clicked, sends the link to the chat, triggering the bot.
         
         results = [

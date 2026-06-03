@@ -18,5 +18,5 @@ INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTALOADER_SESSION_B64 = os.getenv("INSTALOADER_SESSION_B64")
 
 INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE = (
-	"Instagram hozircha vaqtincha ishlamayapti. Iltimos, keyinroq yana urinib ko'ring."
+	"Xozirda mendan ko'p inson foydalanmoqda. Iltimos, keyinroq yana urinib ko'ring."
 )
