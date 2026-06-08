@@ -53,16 +53,11 @@ async def _is_bot_admin(bot: Bot, chat_id: int) -> bool:
 
 def _build_group_caption(message: types.Message, url: str) -> str:
     user = message.from_user
-    full_name = user.full_name if user else "Unknown"
+    first_name = user.first_name if user and user.first_name else ""
+    last_name = user.last_name if user and user.last_name else ""
     user_id = user.id if user else 0
-    parsed = urlparse(url)
-    ig_link_text = f"{parsed.netloc}{parsed.path}" if parsed.netloc and parsed.path else url
-
-    return (
-        f"{GROUP_CAPTION_TITLE}: {full_name}\n"
-        f"{GROUP_CAPTION_USER_LABEL}<a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
-        f"{GROUP_CAPTION_IG_LABEL}: <a href=\"{url}\">{ig_link_text}</a>"
-    )
+    # Build the required caption
+    return f"talab qildi: <a href=\"https://t.me/{user_id}\">{first_name} {last_name}</a>"
 
 
 def _extract_sent_media_file_id(sent_message: types.Message) -> tuple[str | None, str | None]:
@@ -261,7 +256,7 @@ async def handle_link(message: types.Message, bot: Bot):
 
         if is_group_chat:
             media_items = await manager.download_media(metadata=metadata)
-            caption = _build_group_caption(message, url) if is_target_group else None
+            caption = _build_group_caption(message, url) if is_group_chat else None
         else:
             media_items = await manager.download_media(metadata=metadata)
             caption = DEFAULT_CAPTION
