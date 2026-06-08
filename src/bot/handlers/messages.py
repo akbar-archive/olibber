@@ -29,6 +29,7 @@ from src.constants.logging import (
     LOG_MEDIA_CAPTION_NAME_LABEL,
     LOG_MEDIA_CAPTION_USER_LABEL,
 )
+
 _GROUP_INSTAGRAM_LINK_ONLY_PATTERN = re.compile(
     r"^https?://(?:www\.)?instagram\.com/\S+$",
     re.IGNORECASE,
@@ -53,19 +54,16 @@ async def _is_bot_admin(bot: Bot, chat_id: int) -> bool:
 
 def _build_group_caption(message: types.Message, url: str) -> str:
     user = message.from_user
-    full_name = user.full_name if user else "Unknown"
+    first_name = user.first_name if user and user.first_name else ""
+    last_name = user.last_name if user and user.last_name else ""
     user_id = user.id if user else 0
-    parsed = urlparse(url)
-    ig_link_text = f"{parsed.netloc}{parsed.path}" if parsed.netloc and parsed.path else url
-
-    return (
-        f"{GROUP_CAPTION_TITLE}: {full_name}\n"
-        f"{GROUP_CAPTION_USER_LABEL}<a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
-        f"{GROUP_CAPTION_IG_LABEL}: <a href=\"{url}\">{ig_link_text}</a>"
-    )
+    # Build the required caption
+    return f'talab qildi: <a href="tg://user?id={user_id}">{first_name} {last_name}</a>'
 
 
-def _extract_sent_media_file_id(sent_message: types.Message) -> tuple[str | None, str | None]:
+def _extract_sent_media_file_id(
+    sent_message: types.Message,
+) -> tuple[str | None, str | None]:
     if sent_message.photo:
         return "photo", sent_message.photo[-1].file_id
     if sent_message.video:
@@ -81,15 +79,18 @@ def _build_log_caption(message: types.Message, instagram_url: str) -> str:
     user_id = user.id if user else 0
     parsed = urlparse(instagram_url)
     instagram_display = (
-        escape(f"{parsed.netloc.removeprefix('www.')}{parsed.path.rstrip('/')}", quote=False)
+        escape(
+            f"{parsed.netloc.removeprefix('www.')}{parsed.path.rstrip('/')}",
+            quote=False,
+        )
         if parsed.netloc and parsed.path
-        else escape(instagram_url.rstrip('/'), quote=False)
+        else escape(instagram_url.rstrip("/"), quote=False)
     )
     instagram_href = escape(instagram_url, quote=True)
     return (
         f"{LOG_MEDIA_CAPTION_NAME_LABEL}: {full_name}\n"
-        f"{LOG_MEDIA_CAPTION_USER_LABEL}: <a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
-        f"{LOG_MEDIA_CAPTION_INSTAGRAM_LABEL}: <a href=\"{instagram_href}\">{instagram_display}</a>"
+        f'{LOG_MEDIA_CAPTION_USER_LABEL}: <a href="tg://user?id={user_id}">{user_id}</a>\n'
+        f'{LOG_MEDIA_CAPTION_INSTAGRAM_LABEL}: <a href="{instagram_href}">{instagram_display}</a>'
     )
 
 
@@ -148,11 +149,26 @@ async def _send_log_copy(
         for idx, (media_kind, file_id) in enumerate(chunk):
             item_caption = caption if idx == 0 else None
             if media_kind == "photo":
-                media_group.append(types.InputMediaPhoto(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE))
+                media_group.append(
+                    types.InputMediaPhoto(
+                        media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE
+                    )
+                )
             elif media_kind == "video":
-                media_group.append(types.InputMediaVideo(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE, supports_streaming=True))
+                media_group.append(
+                    types.InputMediaVideo(
+                        media=file_id,
+                        caption=item_caption,
+                        parse_mode=HTML_PARSE_MODE,
+                        supports_streaming=True,
+                    )
+                )
             elif media_kind == "audio":
-                media_group.append(types.InputMediaAudio(media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE))
+                media_group.append(
+                    types.InputMediaAudio(
+                        media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE
+                    )
+                )
 
         if media_group:
             await bot.send_media_group(chat_id=TARGET_GROUP_ID, media=media_group)
@@ -171,6 +187,7 @@ async def _send_log_error_copy(
         parse_mode=HTML_PARSE_MODE,
         disable_web_page_preview=True,
     )
+
 
 async def handle_link(message: types.Message, bot: Bot):
     url = (message.text or "").strip()
@@ -203,13 +220,15 @@ async def handle_link(message: types.Message, bot: Bot):
     status_msg: types.Message | None = None
     wait_for_response = not is_group_chat
     track_user_job = not is_group_chat
-    
+
     if track_user_job:
         # Check if user is already processing a request
         can_proceed, remaining = await job_controller.acquire(user_id)
         if not can_proceed:
             if remaining > 0:
-                await message.answer(f"Siz {remaining} soniyadan so'ng yana yuborishingiz mumkin")
+                await message.answer(
+                    f"Siz {remaining} soniyadan so'ng yana yuborishingiz mumkin"
+                )
             else:
                 # User is busy, send a "busy" duplicate request message
                 await message.answer("Men hozir sizning so'rovingiz bilan bandman")
@@ -223,19 +242,20 @@ async def handle_link(message: types.Message, bot: Bot):
         )
         await job_controller.set_waiting_message(user_id, status_msg.message_id)
 
-    
     # Store the URL for the callback handler
     if track_user_job:
         await job_controller.set_pending_url(user_id, url)
 
     metadata = await manager.fetch_metadata()
-    
+
     try:
         if not metadata:
             if not is_group_chat:
                 if platform.name == "instagram":
                     if status_msg:
-                        await status_msg.edit_text(INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE)
+                        await status_msg.edit_text(
+                            INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE
+                        )
                     else:
                         await message.answer(
                             INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
@@ -243,7 +263,9 @@ async def handle_link(message: types.Message, bot: Bot):
                         )
                 else:
                     if status_msg:
-                        await status_msg.edit_text("❌ Metama'lumotlarni olishning imkoni bo'lmadi.")
+                        await status_msg.edit_text(
+                            "❌ Metama'lumotlarni olishning imkoni bo'lmadi."
+                        )
                     else:
                         await message.answer(
                             "❌ Metama'lumotlarni olishning imkoni bo'lmadi.",
@@ -261,7 +283,7 @@ async def handle_link(message: types.Message, bot: Bot):
 
         if is_group_chat:
             media_items = await manager.download_media(metadata=metadata)
-            caption = _build_group_caption(message, url) if is_target_group else None
+            caption = _build_group_caption(message, url) if is_group_chat else None
         else:
             media_items = await manager.download_media(metadata=metadata)
             caption = DEFAULT_CAPTION
