@@ -60,14 +60,14 @@ class UserJobController:
                 state.task = None
 
     async def wait_for_download_cooldown(self, user_id: int) -> None:
-        """Wait for the 5-second download cooldown before allowing the next request."""
+        """Wait for the configured download cooldown before allowing the next request."""
         async with self._lock:
             state = self._states.setdefault(user_id, _UserJobState())
             now = time.monotonic()
             time_since_last_download = now - state.last_download_time
             
-            if time_since_last_download < 5.0:
-                wait_time = 5.0 - time_since_last_download
+            if time_since_last_download < USER_COOLDOWN_SECONDS:
+                wait_time = USER_COOLDOWN_SECONDS - time_since_last_download
             else:
                 wait_time = 0.0
         

@@ -1,9 +1,7 @@
 import re
-from html import escape
-from urllib.parse import urlparse
+import traceback
 
 from aiogram import Bot, types
-import traceback
 from src.core.engine.registry import resolve_platform
 from src.core.engine.manager import VideoManager
 from src.core.engine.job_controller import job_controller
@@ -16,19 +14,7 @@ from src.config.settings import (
     INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
 )
 from src.core.uploaders.telegram import TelegramUploadSender
-
-from src.constants.groups import (
-    GROUP_CAPTION_IG_LABEL,
-    GROUP_CAPTION_TITLE,
-    GROUP_CAPTION_USER_LABEL,
-    TARGET_GROUP_ID,
-)
-from src.constants.telegram import HTML_PARSE_MODE
-from src.constants.logging import (
-    LOG_MEDIA_CAPTION_INSTAGRAM_LABEL,
-    LOG_MEDIA_CAPTION_NAME_LABEL,
-    LOG_MEDIA_CAPTION_USER_LABEL,
-)
+from src.bot.handlers.logger import TelegramLogger
 
 _GROUP_INSTAGRAM_LINK_ONLY_PATTERN = re.compile(
     r"^https?://(?:www\.)?instagram\.com/\S+$",
@@ -57,156 +43,53 @@ def _build_group_caption(message: types.Message, url: str) -> str:
     first_name = user.first_name if user and user.first_name else ""
     last_name = user.last_name if user and user.last_name else ""
     user_id = user.id if user else 0
-    # Build the required caption
     return f'talab qildi: <a href="tg://user?id={user_id}">{first_name} {last_name}</a>'
 
 
-def _extract_sent_media_file_id(
-    sent_message: types.Message,
-) -> tuple[str | None, str | None]:
-    if sent_message.photo:
-        return "photo", sent_message.photo[-1].file_id
-    if sent_message.video:
-        return "video", sent_message.video.file_id
-    if sent_message.audio:
-        return "audio", sent_message.audio.file_id
-    return None, None
-
-
-def _build_log_caption(message: types.Message, instagram_url: str) -> str:
-    user = message.from_user
-    full_name = escape(user.full_name if user else "Unknown")
-    user_id = user.id if user else 0
-    parsed = urlparse(instagram_url)
-    instagram_display = (
-        escape(
-            f"{parsed.netloc.removeprefix('www.')}{parsed.path.rstrip('/')}",
-            quote=False,
-        )
-        if parsed.netloc and parsed.path
-        else escape(instagram_url.rstrip("/"), quote=False)
-    )
-    instagram_href = escape(instagram_url, quote=True)
-    return (
-        f"{LOG_MEDIA_CAPTION_NAME_LABEL}: {full_name}\n"
-        f'{LOG_MEDIA_CAPTION_USER_LABEL}: <a href="tg://user?id={user_id}">{user_id}</a>\n'
-        f'{LOG_MEDIA_CAPTION_INSTAGRAM_LABEL}: <a href="{instagram_href}">{instagram_display}</a>'
-    )
-
-
-async def _send_log_copy(
-    bot: Bot,
-    source_message: types.Message,
-    instagram_url: str,
-    sent_messages: list[types.Message],
-) -> None:
-    if source_message.chat.id == TARGET_GROUP_ID:
-        return
-    # Build (kind, file_id) list preserving order
-    media_entries: list[tuple[str, str]] = []
-    for sent_message in sent_messages:
-        media_kind, file_id = _extract_sent_media_file_id(sent_message)
-        if not media_kind or not file_id:
-            continue
-        media_entries.append((media_kind, file_id))
-
-    if not media_entries:
-        return
-
-    caption = _build_log_caption(source_message, instagram_url)
-
-    # Send in chunks respecting TELEGRAM_MEDIA_GROUP_LIMIT
-    for start in range(0, len(media_entries), TELEGRAM_MEDIA_GROUP_LIMIT):
-        chunk = media_entries[start : start + TELEGRAM_MEDIA_GROUP_LIMIT]
-        # Single item: send as single message so Telegram treats it naturally
-        if len(chunk) == 1:
-            media_kind, file_id = chunk[0]
-            if media_kind == "photo":
-                await bot.send_photo(
-                    chat_id=TARGET_GROUP_ID,
-                    photo=file_id,
-                    caption=caption,
-                    parse_mode=HTML_PARSE_MODE,
-                )
-            elif media_kind == "video":
-                await bot.send_video(
-                    chat_id=TARGET_GROUP_ID,
-                    video=file_id,
-                    caption=caption,
-                    parse_mode=HTML_PARSE_MODE,
-                    supports_streaming=True,
-                )
-            elif media_kind == "audio":
-                await bot.send_audio(
-                    chat_id=TARGET_GROUP_ID,
-                    audio=file_id,
-                    caption=caption,
-                    parse_mode=HTML_PARSE_MODE,
-                )
-            continue
-
-        media_group: list[types.InputMedia] = []
-        for idx, (media_kind, file_id) in enumerate(chunk):
-            item_caption = caption if idx == 0 else None
-            if media_kind == "photo":
-                media_group.append(
-                    types.InputMediaPhoto(
-                        media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE
-                    )
-                )
-            elif media_kind == "video":
-                media_group.append(
-                    types.InputMediaVideo(
-                        media=file_id,
-                        caption=item_caption,
-                        parse_mode=HTML_PARSE_MODE,
-                        supports_streaming=True,
-                    )
-                )
-            elif media_kind == "audio":
-                media_group.append(
-                    types.InputMediaAudio(
-                        media=file_id, caption=item_caption, parse_mode=HTML_PARSE_MODE
-                    )
-                )
-
-        if media_group:
-            await bot.send_media_group(chat_id=TARGET_GROUP_ID, media=media_group)
-
-
-async def _send_log_error_copy(
-    bot: Bot,
-    source_message: types.Message,
-    instagram_url: str,
-    error_text: str,
-) -> None:
-    caption = _build_log_caption(source_message, instagram_url)
-    await bot.send_message(
-        chat_id=TARGET_GROUP_ID,
-        text=f"ERROR\n\n{caption}\n\n<blockquote>{escape(error_text)}</blockquote>",
-        parse_mode=HTML_PARSE_MODE,
-        disable_web_page_preview=True,
-    )
-
-
-async def handle_link(message: types.Message, bot: Bot):
+async def _prepare_and_validate_url(message: types.Message, bot: Bot) -> tuple[str | None, bool]:
     url = (message.text or "").strip()
     if not url:
-        return
+        return None, False
 
     is_group_chat = message.chat.type in {"group", "supergroup"}
-    is_target_group = message.chat.id == TARGET_GROUP_ID
     if is_group_chat:
         url = _extract_group_instagram_link(url)
         if not url:
-            return
+            return None, False
 
         if not await _is_bot_admin(bot, message.chat.id):
             await message.answer(
                 GROUP_NEED_ADMIN_MESSAGE,
                 reply_to_message_id=message.message_id,
             )
-            return
+            return None, False
+
+    return url, is_group_chat
+
+
+async def _handle_lock_and_cooldown(
+    user_id: int, message: types.Message, track_user_job: bool
+) -> bool:
+    if not track_user_job:
+        return True
+
+    can_proceed, remaining = await job_controller.acquire(user_id)
+    if not can_proceed:
+        if remaining > 0:
+            await message.answer(
+                f"Siz {remaining} soniyadan so'ng yana yuborishingiz mumkin"
+            )
+        else:
+            await message.answer("Men hozir sizning so'rovingiz bilan bandman")
+        return False
+
+    return True
+
+
+async def handle_link(message: types.Message, bot: Bot):
+    url, is_group_chat = await _prepare_and_validate_url(message, bot)
+    if not url:
+        return
 
     platform = resolve_platform(url)
     if not platform:
@@ -221,28 +104,18 @@ async def handle_link(message: types.Message, bot: Bot):
     wait_for_response = not is_group_chat
     track_user_job = not is_group_chat
 
-    if track_user_job:
-        # Check if user is already processing a request
-        can_proceed, remaining = await job_controller.acquire(user_id)
-        if not can_proceed:
-            if remaining > 0:
-                await message.answer(
-                    f"Siz {remaining} soniyadan so'ng yana yuborishingiz mumkin"
-                )
-            else:
-                # User is busy, send a "busy" duplicate request message
-                await message.answer("Men hozir sizning so'rovingiz bilan bandman")
-            return
+    if not await _handle_lock_and_cooldown(user_id, message, track_user_job):
+        return
+
+    logger = TelegramLogger(bot)
 
     if wait_for_response:
-        # Keep the private chat feedback, but stay silent in groups.
         status_msg = await message.answer(
             get_random_phrase(),
             reply_to_message_id=message.message_id,
         )
         await job_controller.set_waiting_message(user_id, status_msg.message_id)
 
-    # Store the URL for the callback handler
     if track_user_job:
         await job_controller.set_pending_url(user_id, url)
 
@@ -277,19 +150,19 @@ async def handle_link(message: types.Message, bot: Bot):
 
         summary = manager.formatter.build_summary(metadata)
 
-        # Auto-download for supported platforms.
         if track_user_job:
             await job_controller.wait_for_download_cooldown(user_id)
 
         if is_group_chat:
             media_items = await manager.download_media(metadata=metadata)
-            caption = _build_group_caption(message, url) if is_group_chat else None
+            caption = _build_group_caption(message, url)
         else:
             media_items = await manager.download_media(metadata=metadata)
             caption = DEFAULT_CAPTION
 
         if not media_items:
             raise RuntimeError("No media items returned")
+
         sender = TelegramUploadSender(
             message=message,
             status_message=status_msg,
@@ -299,7 +172,9 @@ async def handle_link(message: types.Message, bot: Bot):
             reply_to_message_id=None if not is_group_chat else message.message_id,
         )
         sent_messages = await sender.send(media_items)
-        await _send_log_copy(bot, message, url, sent_messages)
+
+        await logger.log_media(message, url, sent_messages)
+
         if wait_for_response and summary:
             await message.answer(
                 summary,
@@ -314,7 +189,9 @@ async def handle_link(message: types.Message, bot: Bot):
         traceback.print_exc()
         instagram_error = getattr(manager.downloader, "_last_error", None)
         error_text = instagram_error or str(e)
-        await _send_log_error_copy(bot, message, url, error_text)
+
+        await logger.log_error(message, url, error_text)
+
         if not is_group_chat:
             if platform.name == "instagram":
                 message_text = INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE
@@ -338,3 +215,4 @@ async def handle_link(message: types.Message, bot: Bot):
 
         if track_user_job:
             await job_controller.release(user_id)
+
