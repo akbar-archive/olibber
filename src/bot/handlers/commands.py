@@ -2,14 +2,26 @@ from aiogram import types
 
 
 async def handle_start(message: types.Message) -> None:
-    await message.answer("Salom, menga Instagram havolasini yuboring, men media faylni yuklab olib beraman.")
+    await message.answer(
+        "Salom! 👋\n\n"
+        "Men Instagram rasmlar va videolarni yuklab beruvchi botman.\n"
+        "Boshlash uchun /help buyrug'ini yuboring."
+    )
 
 
 async def handle_help(message: types.Message) -> None:
     await message.answer(
-        "<b>Buyruqlar:</b>\n"
-        "/start - xush kelibsiz xabarini ko'rsatadi\n"
-        "/help - yordam matnini ko'rsatadi\n\n"
-        "Boshlash uchun qo'llab-quvvatlanadigan Instagram havolasini yuboring.\n"
-        "Kerak bo'lsa, menga yozing: @akbarswe_bot"
+        "<b>📥 Olibber Bot</b>\n\n"
+        "Bu bot Instagram havolalaridan rasm va videolarni yuklab beradi.\n\n"
+        "<b>🛠 Buyruqlar:</b>\n"
+        "/start — botni ishga tushirish\n"
+        "/help — ushbu yordam xabarini ko'rish\n\n"
+        "<b>📌 Qanday ishlatish kerak:</b>\n"
+        "1. Instagram'dan post, reel havolasini nusxalang\n"
+        "2. Havolani shu yerga yuboring\n"
+        "3. Bot uni yuklab beradi\n\n"
+        "<b>⚠️ Eslatma:</b>\n"
+        "Faqat ochiq (public) akkauntlar ishlaydi.\n\n"
+        "<b>🆘 Muammo bo'lsa:</b>\n"
+        "@olibber_support_bot ga yozing",
     )
