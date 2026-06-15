@@ -8,6 +8,8 @@ LOADING_PHRASES = [
     "So'rovingizni mehr bilan qayta ishlayapman...",
     "Deyarli tayyor, bir lahza...",
     "Hammasini siz uchun tayyorlayapman...",
+    "Kontentingiz yo'lda...",
+    "Yuklab olish muvaffaqiyatli yakunlanish arafasida...",
 ]
 
 def get_random_phrase() -> str:
