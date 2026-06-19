@@ -16,6 +16,7 @@ GROUP_NEED_ADMIN_MESSAGE = (
 # Optional Instagram session-based auth for authenticated metadata fetching
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTALOADER_SESSION_B64 = os.getenv("INSTALOADER_SESSION_B64")
+INSTAGRAM_SESSIONID = os.getenv("INSTAGRAM_SESSIONID", "")
 
 INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE = (
 	"Xozirda mendan ko'p inson foydalanmoqda. Iltimos, keyinroq yana urinib ko'ring."

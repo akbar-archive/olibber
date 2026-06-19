@@ -17,7 +17,7 @@ async def handle_help(message: types.Message) -> None:
         "/start — botni ishga tushirish\n"
         "/help — ushbu yordam xabarini ko'rish\n\n"
         "<b>📌 Qanday ishlatish kerak:</b>\n"
-        "1. Instagram'dan post, reel havolasini nusxalang\n"
+        "1. Instagram'dan post, reel yoki story havolasini nusxalang\n"
         "2. Havolani shu yerga yuboring\n"
         "3. Bot uni yuklab beradi\n\n"
         "<b>⚠️ Eslatma:</b>\n"
