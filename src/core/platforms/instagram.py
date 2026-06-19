@@ -1,12 +1,16 @@
 import asyncio
 import base64
+import json
 import os
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from urllib.request import Request, urlopen
+
+import requests as _requests
 
 import instaloader
 
@@ -23,6 +27,7 @@ from src.config.settings import (
     INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
     INSTAGRAM_USERNAME,
     INSTALOADER_SESSION_B64,
+    INSTAGRAM_SESSIONID,
     MAX_VIDEO_SIZE_BYTES,
 )
 
@@ -42,6 +47,8 @@ class InstagramSessionManager:
         self.last_error: str | None = None
         if INSTALOADER_SESSION_B64 and INSTAGRAM_USERNAME:
             self.load_session_from_env()
+        elif INSTAGRAM_SESSIONID:
+            self.load_session_from_cookie(INSTAGRAM_SESSIONID)
 
     def load_session_from_env(self) -> None:
         try:
@@ -63,10 +70,25 @@ class InstagramSessionManager:
             self.last_error = f"Instagram sessiyasini yuklab bo'lmadi: {exc}"
             print("Failed to load Instagram session:", exc)
 
+    def load_session_from_cookie(self, session_id: str) -> None:
+        try:
+            # URL-decode in case value came from env as %3A-encoded string
+            session_id = unquote(session_id)
+            # Set the sessionid cookie directly on the underlying requests.Session
+            self.loader.context._session.cookies.set(
+                "sessionid", session_id, domain=".instagram.com"
+            )
+            self.session_loaded = True
+            self.last_error = None
+            print("Instagram session loaded from INSTAGRAM_SESSIONID cookie.")
+        except Exception as exc:
+            self.last_error = f"INSTAGRAM_SESSIONID dan sessiya yuklab bo'lmadi: {exc}"
+            print("Failed to load session from cookie:", exc)
+
     def require_session(self) -> bool:
         if self.session_loaded:
             return True
-        self.last_error = "Instagram sessiyasi sozlanmagan. INSTALOADER_SESSION_B64 va INSTAGRAM_USERNAME ni belgilang."
+        self.last_error = "Instagram sessiyasi sozlanmagan. INSTAGRAM_SESSIONID yoki INSTALOADER_SESSION_B64 ni belgilang."
         print(self.last_error)
         return False
 
@@ -329,17 +351,21 @@ class InstagramDownloader(AbstractVideoDownloader):
             return None
 
         if "/stories/" in url:
-            username, _ = self._url_parser.extract_story_parts(url)
+            username, story_id = self._url_parser.extract_story_parts(url)
             if not username:
                 return None
-            info = {
+            info: InfoDict = {
+                "id": story_id or username,
+                "title": f"{username} - Story",
                 "author_username": username,
                 "posted_at": None,
                 "duration": 0,
+                "filesize_approx": None,
                 "view_count": None,
                 "comment_count": None,
                 "like_count": None,
                 "description": "",
+                "thumbnail": None,
             }
             self._metadata_cache[url] = info
             return info
@@ -445,56 +471,166 @@ class InstagramDownloader(AbstractVideoDownloader):
         )
         return DownloadResult(media_items=media_items, info=info)
 
+    def _session_id(self) -> str | None:
+        if INSTAGRAM_SESSIONID:
+            return unquote(INSTAGRAM_SESSIONID)
+        return self.loader.context._session.cookies.get("sessionid", domain=".instagram.com")
+
+    _BROWSER_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+        "Referer": "https://www.instagram.com/",
+    }
+
+    def _resolve_userid(self, username: str) -> int:
+        primary_exc: Exception | None = None
+
+        try:
+            profile = instaloader.Profile.from_username(self.loader.context, username)
+            return profile.userid
+        except Exception as exc:
+            primary_exc = exc
+            print(f"Profile.from_username('{username}') failed [{type(exc).__name__}]: {exc}")
+
+        # Fallback: web_profile_info with browser headers — Instagram rejects instaloader's
+        # own User-Agent for api/v1 endpoints ("useragent mismatch")
+        try:
+            session_id = self._session_id()
+            if session_id:
+                resp = _requests.get(
+                    "https://www.instagram.com/api/v1/users/web_profile_info/",
+                    params={"username": username},
+                    headers=self._BROWSER_HEADERS,
+                    cookies={"sessionid": session_id},
+                    timeout=30,
+                )
+                if resp.ok:
+                    user_id = resp.json().get("data", {}).get("user", {}).get("id")
+                    if user_id:
+                        print(f"Resolved user ID via web_profile_info: {user_id}")
+                        return int(user_id)
+                else:
+                    print(f"web_profile_info HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as fallback_exc:
+            print(f"web_profile_info fallback failed [{type(fallback_exc).__name__}]: {fallback_exc}")
+
+        exc_type = type(primary_exc).__name__ if primary_exc else ""
+        if "LoginRequired" in exc_type:
+            raise RuntimeError(
+                "Story-larni yuklab olish uchun Instagram sessiyasi talab etiladi."
+            ) from primary_exc
+        raise RuntimeError(
+            f"@{username} profilini yuklab bo'lmadi. "
+            "Hisob xususiy (private), mavjud emas, yoki Instagram sessiyasi eskirgan."
+        ) from primary_exc
+
+    def _fetch_story_nodes(self, userid: int) -> list[dict]:
+        """Call the same GraphQL endpoint the browser uses for stories.
+
+        instaloader's get_stories() hits this same endpoint but with its own
+        User-Agent, which Instagram rejects with 400 "invalid request".
+        """
+        session_id = self._session_id()
+        if not session_id:
+            raise RuntimeError("Instagram sessiyasi topilmadi.")
+
+        variables = json.dumps({"reel_ids": [userid], "precomposed_overlay": False})
+        resp = _requests.get(
+            "https://www.instagram.com/graphql/query",
+            params={
+                "query_hash": "303a4ae99711322310f25250d988f3b7",
+                "variables": variables,
+            },
+            headers=self._BROWSER_HEADERS,
+            cookies={"sessionid": session_id},
+            timeout=30,
+        )
+        if not resp.ok:
+            raise RuntimeError(f"Story API xatosi {resp.status_code}: {resp.text[:200]}")
+
+        nodes: list[dict] = []
+        for reel in (resp.json().get("data") or {}).get("reels_media", []):
+            nodes.extend(reel.get("items", []))
+        return nodes
+
     def _download_story_url(self, url: str) -> DownloadResult:
         username, story_id = self._url_parser.extract_story_parts(url)
         if not username:
             return DownloadResult(media_items=[], info=None)
 
-        profile = instaloader.Profile.from_username(self.loader.context, username)
+        userid = self._resolve_userid(username)
+        nodes = self._fetch_story_nodes(userid)
+
         media_items: list[MediaItem] = []
+        story_found = False
+        first_item_date: datetime | None = None
 
-        for story in self.loader.get_stories(userids=[profile.userid]):
-            for item in story.get_items():
-                if story_id and str(item.mediaid) != story_id:
-                    continue
+        for node in nodes:
+            if story_id and str(node.get("id")) != story_id:
+                continue
 
-                is_video = item.is_video
-                item_node = getattr(item, "_node", {}) or {}
-                media_url = item_node.get("video_url") if is_video else item.url
-                if is_video and not media_url:
-                    try:
-                        media_url = item.video_url
-                    except Exception:
-                        media_url = item.url
-                
-                width, height = self._data_extractor.extract_dimensions(getattr(item, "_node", {}))
-                media_items.append(
-                    MediaItem(
-                        kind="video" if is_video else "photo",
-                        url=media_url,
-                        thumbnail_url=item.url,
-                        width=width,
-                        height=height,
-                        title=f"{username} Story",
-                        author=username
-                    )
+            story_found = True
+            is_video = bool(node.get("is_video", False))
+            display_url = node.get("display_url", "")
+
+            if is_video:
+                video_resources = node.get("video_resources", [])
+                media_url = video_resources[0]["src"] if video_resources else display_url
+            else:
+                media_url = display_url
+
+            dimensions = node.get("dimensions") or {}
+            width = dimensions.get("width")
+            height = dimensions.get("height")
+
+            raw_duration = node.get("video_duration")
+            duration = int(round(float(raw_duration))) if is_video and raw_duration else None
+
+            taken_at = node.get("taken_at_timestamp")
+            if taken_at and first_item_date is None:
+                first_item_date = datetime.utcfromtimestamp(taken_at)
+
+            media_items.append(
+                MediaItem(
+                    kind="video" if is_video else "photo",
+                    url=media_url,
+                    thumbnail_url=display_url,
+                    width=width,
+                    height=height,
+                    duration=duration,
+                    title=f"{username} - Story",
+                    author=username,
                 )
+            )
 
-            if story_id and media_items:
-                break
+        if story_id and not story_found:
+            raise RuntimeError(
+                "Story topilmadi. Story-lar 24 soat o'tgach o'chib ketadi, "
+                "shuning uchun u muddati tugagan bo'lishi mumkin."
+            )
 
         if story_id and media_items:
             media_items = media_items[:1]
 
         info: InfoDict = {
+            "id": story_id or username,
+            "title": f"{username} - Story",
             "author_username": username,
-            "posted_at": None,
-            "duration": 0,
+            "posted_at": first_item_date,
+            "duration": media_items[0].duration or 0 if media_items else 0,
+            "filesize_approx": None,
             "view_count": None,
             "comment_count": None,
             "like_count": None,
             "description": "",
+            "thumbnail": media_items[0].thumbnail_url if media_items else None,
         }
+        self._metadata_cache[url] = info
         return DownloadResult(media_items=media_items, info=info)
 
 
