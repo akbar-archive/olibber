@@ -6,7 +6,6 @@ from collections import deque
 from typing import Any
 from urllib.parse import urlparse
 
-import uvicorn
 from aiogram.methods.base import TelegramMethod
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -118,6 +117,7 @@ def create_app() -> FastAPI:
 
 
 def run_webhook() -> None:
+    import uvicorn
     uvicorn.run(app, host=WEBHOOK_HOST, port=WEBHOOK_PORT)
 
 
