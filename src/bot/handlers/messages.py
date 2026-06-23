@@ -16,21 +16,7 @@ from src.config.settings import (
 from src.core.uploaders.telegram import TelegramUploadSender
 from src.bot.handlers.logger import TelegramLogger
 
-_GROUP_INSTAGRAM_LINK_ONLY_PATTERN = re.compile(
-    r"^https?://(?:www\.)?instagram\.com/\S+$",
-    re.IGNORECASE,
-)
-
-
-def _extract_group_instagram_link(text: str | None) -> str | None:
-    if not text:
-        return None
-
-    candidate = text.strip()
-    if not _GROUP_INSTAGRAM_LINK_ONLY_PATTERN.fullmatch(candidate):
-        return None
-
-    return candidate
+_URL_PATTERN = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 
 async def _is_bot_admin(bot: Bot, chat_id: int) -> bool:
@@ -47,24 +33,12 @@ def _build_group_caption(message: types.Message, url: str) -> str:
 
 
 async def _prepare_and_validate_url(message: types.Message, bot: Bot) -> tuple[str | None, bool]:
-    url = (message.text or "").strip()
-    if not url:
+    text = (message.text or "").strip()
+    if not text or not _URL_PATTERN.fullmatch(text):
         return None, False
 
     is_group_chat = message.chat.type in {"group", "supergroup"}
-    if is_group_chat:
-        url = _extract_group_instagram_link(url)
-        if not url:
-            return None, False
-
-        if not await _is_bot_admin(bot, message.chat.id):
-            await message.answer(
-                GROUP_NEED_ADMIN_MESSAGE,
-                reply_to_message_id=message.message_id,
-            )
-            return None, False
-
-    return url, is_group_chat
+    return text, is_group_chat
 
 
 async def _handle_lock_and_cooldown(
@@ -93,6 +67,18 @@ async def handle_link(message: types.Message, bot: Bot):
 
     platform = resolve_platform(url)
     if not platform:
+        if not is_group_chat:
+            await message.answer(
+                "Bu havola qo'llab-quvvatlanmaydi. Faqat Instagram va YouTube havolalari ishlaydi.",
+                reply_to_message_id=message.message_id,
+            )
+        return
+
+    if is_group_chat and not await _is_bot_admin(bot, message.chat.id):
+        await message.answer(
+            GROUP_NEED_ADMIN_MESSAGE,
+            reply_to_message_id=message.message_id,
+        )
         return
 
     manager = VideoManager(url, platform)

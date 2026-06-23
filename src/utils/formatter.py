@@ -116,6 +116,46 @@ def safe_text(text: str | None) -> str:
     return escape(text)
 
 
+class YoutubeFormatter:
+    def build_summary(self, info: InfoDict) -> str:
+        lines: list[str] = []
+
+        author_username = info.get("author_username")
+        channel_url = info.get("channel_url")
+        if author_username:
+            if channel_url:
+                lines.append(f'👤 <b>Kanal:</b> <a href="{channel_url}">{safe_text(author_username)}</a>')
+            else:
+                lines.append(f"👤 <b>Kanal:</b> {safe_text(author_username)}")
+
+        posted = format_posted(info.get("posted_at"))
+        if posted:
+            lines.append(f"📅 <b>Joylangan:</b> {posted}")
+
+        duration_value = info.get("duration")
+        if duration_value:
+            lines.append(f"⏱️ <b>Davomiyligi:</b> {humanize_duration(duration_value)}")
+
+        view_count = info.get("view_count")
+        if view_count is not None:
+            lines.append(f"👀 <b>Ko'rishlar:</b> {humanize_number(view_count)}")
+
+        like_count = info.get("like_count")
+        if like_count is not None:
+            lines.append(f"❤️ <b>Yoqtirishlar:</b> {humanize_number(like_count)}")
+
+        comment_count = info.get("comment_count")
+        if comment_count is not None:
+            lines.append(f"💬 <b>Izohlar:</b> {humanize_number(comment_count)}")
+
+        description = info.get("description")
+        if description:
+            lines.append("📝 <b>Tavsif:</b>")
+            lines.append(f"<blockquote expandable>{safe_text(description)}</blockquote>")
+
+        return "\n".join(lines)
+
+
 class InstagramFormatter:
     def _build_base_lines(self, info: InfoDict) -> list[str]:
         lines: list[str] = []
