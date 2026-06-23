@@ -1,8 +1,11 @@
-from aiogram import Bot, types
+from aiogram import Bot, Router, types
 
-from src.config.settings import GROUP_NEED_ADMIN_MESSAGE
+router = Router()
+
+from src.constants.messages import GROUP_NEED_ADMIN_MESSAGE
 
 
+@router.my_chat_member()
 async def handle_my_chat_member(update: types.ChatMemberUpdated, bot: Bot) -> None:
     chat = update.chat
     if chat.type not in {"group", "supergroup"}:

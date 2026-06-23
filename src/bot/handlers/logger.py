@@ -8,35 +8,35 @@ from src.core.uploaders.telegram import TelegramMediaSender
 from src.constants.telegram import HTML_PARSE_MODE
 from src.constants.groups import TARGET_GROUP_ID
 from src.constants.logging import (
-    LOG_MEDIA_CAPTION_INSTAGRAM_LABEL,
+    LOG_MEDIA_CAPTION_URL_LABEL,
     LOG_MEDIA_CAPTION_NAME_LABEL,
     LOG_MEDIA_CAPTION_USER_LABEL,
 )
-from src.config.settings import TELEGRAM_MEDIA_GROUP_LIMIT
+from src.constants.limits import TELEGRAM_MEDIA_GROUP_LIMIT
 
 
 class TelegramLogger:
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
 
-    def build_log_caption(self, message: types.Message, instagram_url: str) -> str:
+    def build_log_caption(self, message: types.Message, source_url: str) -> str:
         user = message.from_user
         full_name = escape(user.full_name if user else "Unknown")
         user_id = user.id if user else 0
-        parsed = urlparse(instagram_url)
-        instagram_display = (
+        parsed = urlparse(source_url)
+        url_display = (
             escape(
                 f"{parsed.netloc.removeprefix('www.')}{parsed.path.rstrip('/')}",
                 quote=False,
             )
             if parsed.netloc and parsed.path
-            else escape(instagram_url.rstrip("/"), quote=False)
+            else escape(source_url.rstrip("/"), quote=False)
         )
-        instagram_href = escape(instagram_url, quote=True)
+        url_href = escape(source_url, quote=True)
         return (
             f"{LOG_MEDIA_CAPTION_NAME_LABEL}: {full_name}\n"
             f'{LOG_MEDIA_CAPTION_USER_LABEL}: <a href="tg://user?id={user_id}">{user_id}</a>\n'
-            f'{LOG_MEDIA_CAPTION_INSTAGRAM_LABEL}: <a href="{instagram_href}">{instagram_display}</a>'
+            f'{LOG_MEDIA_CAPTION_URL_LABEL}: <a href="{url_href}">{url_display}</a>'
         )
 
     def _extract_sent_media_file_id(
@@ -54,7 +54,7 @@ class TelegramLogger:
     async def log_media(
         self,
         source_message: types.Message,
-        instagram_url: str,
+        source_url: str,
         sent_messages: list[types.Message],
     ) -> None:
         if source_message.chat.id == TARGET_GROUP_ID:
@@ -70,15 +70,14 @@ class TelegramLogger:
                     kind=media_kind,
                     url=None,
                     stream=None,
+                    file_id=file_id,
                 )
             )
-            # Add file_id dynamic attribute/field supporting our new TelegramMediaSender logic
-            media_items[-1].file_id = file_id
 
         if not media_items:
             return
 
-        caption = self.build_log_caption(source_message, instagram_url)
+        caption = self.build_log_caption(source_message, source_url)
 
         sender = TelegramMediaSender(
             bot=self._bot,
@@ -91,10 +90,10 @@ class TelegramLogger:
     async def log_error(
         self,
         source_message: types.Message,
-        instagram_url: str,
+        source_url: str,
         error_text: str,
     ) -> None:
-        caption = self.build_log_caption(source_message, instagram_url)
+        caption = self.build_log_caption(source_message, source_url)
         await self._bot.send_message(
             chat_id=TARGET_GROUP_ID,
             text=f"ERROR\n\n{caption}\n\n<blockquote>{escape(error_text)}</blockquote>",

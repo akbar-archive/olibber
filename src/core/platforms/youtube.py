@@ -1,7 +1,11 @@
 import asyncio
+import logging
 import re
 
 import yt_dlp
+from cachetools import TTLCache
+
+from src.utils.formatter import AbstractBaseFormatter, format_posted, humanize_duration, humanize_number, safe_text
 
 from src.core.platforms.base import (
     AbstractLinkChecker,
@@ -12,9 +16,15 @@ from src.core.platforms.base import (
     InfoDict,
     MediaItem,
 )
-from src.config.settings import MAX_VIDEO_SIZE_BYTES
+from src.constants.limits import MAX_VIDEO_SIZE_BYTES
 
 _DEFAULT_FORMAT = "best[ext=mp4][height<=720]/best[ext=mp4]/18"
+
+logger = logging.getLogger(__name__)
+
+# TTL of 10 minutes
+_CACHE_TTL = 600
+_CACHE_MAX = 64
 
 
 class YoutubeLinkChecker(AbstractLinkChecker):
@@ -31,14 +41,9 @@ class YoutubeLinkChecker(AbstractLinkChecker):
 class YoutubeDownloader(AbstractVideoDownloader):
     def __init__(self, video_limit_bytes: int = MAX_VIDEO_SIZE_BYTES) -> None:
         self.video_limit_bytes = video_limit_bytes
-        self._metadata_cache: dict[str, InfoDict] = {}
-        self._download_cache: dict[str, DownloadResult] = {}
-        self._cache_limit = 64
+        self._metadata_cache: TTLCache = TTLCache(maxsize=_CACHE_MAX, ttl=_CACHE_TTL)
+        self._download_cache: TTLCache = TTLCache(maxsize=_CACHE_MAX, ttl=_CACHE_TTL)
         self.last_error: str | None = None
-
-    def _trim_cache(self, cache: dict) -> None:
-        while len(cache) > self._cache_limit:
-            cache.pop(next(iter(cache)), None)
 
     def _ydl_opts(self, **extra) -> dict:
         return {"quiet": True, "no_warnings": True, **extra}
@@ -69,13 +74,12 @@ class YoutubeDownloader(AbstractVideoDownloader):
                 }
             except Exception as exc:
                 self.last_error = str(exc)
-                print("YouTube metadata fetch failed:", exc)
+                logger.warning("YouTube metadata fetch failed: %s", exc)
                 return None
 
         result = await asyncio.to_thread(_fetch)
         if result:
             self._metadata_cache[url] = result
-            self._trim_cache(self._metadata_cache)
         return result
 
     async def download_media(
@@ -120,13 +124,12 @@ class YoutubeDownloader(AbstractVideoDownloader):
                 return DownloadResult(media_items=[item], info=metadata)
             except Exception as exc:
                 self.last_error = str(exc)
-                print("YouTube download failed:", exc)
+                logger.error("YouTube download failed: %s", exc)
                 return DownloadResult(media_items=[], info=metadata)
 
         result = await asyncio.to_thread(_resolve)
         if result.media_items:
             self._download_cache[cache_key] = result
-            self._trim_cache(self._download_cache)
         return result
 
 
@@ -143,5 +146,23 @@ class YoutubePlatform(AbstractPlatform):
         return YoutubeDownloader()
 
     def create_formatter(self) -> AbstractVideoFormatter:
-        from src.utils.formatter import YoutubeFormatter
         return YoutubeFormatter()
+
+
+class YoutubeFormatter(AbstractBaseFormatter):
+    def build_summary(self, info: InfoDict) -> str:
+        lines: list[str] = []
+
+        author_username = info.get("author_username")
+        channel_url = info.get("channel_url")
+        if author_username:
+            if channel_url:
+                lines.append(f'👤 <b>Kanal:</b> <a href="{channel_url}">{safe_text(author_username)}</a>')
+            else:
+                lines.append(f"👤 <b>Kanal:</b> {safe_text(author_username)}")
+
+        lines.extend(self._build_common_metrics(info))
+
+        lines.extend(self._get_description_lines(info.get("description"), lines))
+
+        return "\n".join(lines)

@@ -23,6 +23,15 @@ MANAGE_TELEGRAM_WEBHOOK = os.getenv("MANAGE_TELEGRAM_WEBHOOK", "").strip().lower
 
 
 def _build_webhook_url(base_url: str, path: str) -> str:
+    """
+    Build the full webhook URL.
+
+    If ``base_url`` already contains a non-root path (e.g. ``https://app.com/tgbot``),
+    that path is used as-is and ``path`` is ignored — this lets operators set the
+    complete webhook URL in ``TELEGRAM_WEBHOOK_URL`` without needing a separate
+    ``TELEGRAM_WEBHOOK_PATH``.  When ``base_url`` has no meaningful path (bare
+    domain or trailing slash only), ``path`` is appended.
+    """
     parsed_url = urlparse(base_url)
     if parsed_url.path and parsed_url.path != "/":
         return base_url.rstrip("/")
@@ -109,4 +118,11 @@ def create_app() -> FastAPI:
 
 
 def run_webhook() -> None:
-    uvicorn.run(create_app(), host=WEBHOOK_HOST, port=WEBHOOK_PORT)
+    uvicorn.run(app, host=WEBHOOK_HOST, port=WEBHOOK_PORT)
+
+
+# Module-level ASGI application — used by Vercel and any other ASGI runner
+# that imports this module directly (e.g. ``vercel`` serverless functions).
+# In development (polling) mode this module is never imported, so there are
+# no unwanted side-effects during local runs.
+app = create_app()

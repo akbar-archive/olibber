@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "src/bot/webhook.py": {
+      "maxDuration": 10
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/src/bot/webhook.py"
+    }
+  ]
+}

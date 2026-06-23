@@ -1,3 +1,5 @@
+import time
+
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto, InputMediaVideo, Message, URLInputFile, InputMediaAudio
 
@@ -128,7 +130,7 @@ class TelegramMediaSender:
         )
 
     def _build_media_input(self, item: MediaItem):
-        if getattr(item, "file_id", None):
+        if item.file_id:
             return item.file_id
 
         if item.stream:

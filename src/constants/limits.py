@@ -1,0 +1,6 @@
+"""Numeric limits and timeout constants for bot behavior."""
+
+MAX_VIDEO_SIZE_BYTES = 50 * 1024 * 1024
+TELEGRAM_MEDIA_GROUP_LIMIT = 10
+TELEGRAM_UPLOAD_TIMEOUT_SECONDS = 900
+USER_COOLDOWN_SECONDS = 5

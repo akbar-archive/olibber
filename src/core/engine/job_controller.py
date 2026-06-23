@@ -1,7 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from src.config.settings import USER_COOLDOWN_SECONDS
+from src.constants.limits import USER_COOLDOWN_SECONDS
 
 @dataclass
 class _UserJobState:

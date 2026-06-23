@@ -46,7 +46,7 @@ Edit `.env` with your values.
 ### 3. Generate Instagram session
 
 ```bash
-python tools/instagram_session_b64.py
+python scripts/instagram_session_b64.py
 ```
 
 Enter your Instagram credentials. Copy the output into `INSTALOADER_SESSION_B64` in your `.env`.

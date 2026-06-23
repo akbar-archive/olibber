@@ -1,20 +1,15 @@
+import logging
 import re
-import traceback
 
-from aiogram import Bot, types
-from src.core.engine.registry import resolve_platform
-from src.core.engine.manager import VideoManager
+from aiogram import Bot, F, Router, types
+
+from src.constants.messages import GROUP_NEED_ADMIN_MESSAGE
 from src.core.engine.job_controller import job_controller
-from src.config.phrases import get_random_phrase
-from src.config.settings import (
-    DEFAULT_CAPTION,
-    GROUP_NEED_ADMIN_MESSAGE,
-    TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
-    TELEGRAM_MEDIA_GROUP_LIMIT,
-    INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
-)
-from src.core.uploaders.telegram import TelegramUploadSender
-from src.bot.handlers.logger import TelegramLogger
+from src.core.engine.registry import resolve_platform
+from src.services.media_processor import MediaProcessorService
+
+logger = logging.getLogger(__name__)
+router = Router()
 
 _URL_PATTERN = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
@@ -24,15 +19,7 @@ async def _is_bot_admin(bot: Bot, chat_id: int) -> bool:
     return chat_member.status in {"administrator", "creator"}
 
 
-def _build_group_caption(message: types.Message, url: str) -> str:
-    user = message.from_user
-    first_name = user.first_name if user and user.first_name else ""
-    last_name = user.last_name if user and user.last_name else ""
-    user_id = user.id if user else 0
-    return f'talab qildi: <a href="tg://user?id={user_id}">{first_name} {last_name}</a>'
-
-
-async def _prepare_and_validate_url(message: types.Message, bot: Bot) -> tuple[str | None, bool]:
+async def _prepare_and_validate_url(message: types.Message) -> tuple[str | None, bool]:
     text = (message.text or "").strip()
     if not text or not _URL_PATTERN.fullmatch(text):
         return None, False
@@ -60,8 +47,9 @@ async def _handle_lock_and_cooldown(
     return True
 
 
+@router.message(F.text.regexp(r"https?://"))
 async def handle_link(message: types.Message, bot: Bot):
-    url, is_group_chat = await _prepare_and_validate_url(message, bot)
+    url, is_group_chat = await _prepare_and_validate_url(message)
     if not url:
         return
 
@@ -74,6 +62,10 @@ async def handle_link(message: types.Message, bot: Bot):
             )
         return
 
+    link_checker = platform.create_link_checker()
+    if not link_checker.is_valid(url):
+        return
+
     if is_group_chat and not await _is_bot_admin(bot, message.chat.id):
         await message.answer(
             GROUP_NEED_ADMIN_MESSAGE,
@@ -81,124 +73,20 @@ async def handle_link(message: types.Message, bot: Bot):
         )
         return
 
-    manager = VideoManager(url, platform)
-    if not manager.is_valid_url():
-        return
-
     user_id = message.from_user.id if message.from_user else 0
-    status_msg: types.Message | None = None
-    wait_for_response = not is_group_chat
     track_user_job = not is_group_chat
 
     if not await _handle_lock_and_cooldown(user_id, message, track_user_job):
         return
 
-    logger = TelegramLogger(bot)
-
-    if wait_for_response:
-        status_msg = await message.answer(
-            get_random_phrase(),
-            reply_to_message_id=message.message_id,
-        )
-        await job_controller.set_waiting_message(user_id, status_msg.message_id)
-
     if track_user_job:
         await job_controller.set_pending_url(user_id, url)
 
-    metadata = await manager.fetch_metadata()
-
-    try:
-        if not metadata:
-            if not is_group_chat:
-                if platform.name == "instagram":
-                    if status_msg:
-                        await status_msg.edit_text(
-                            INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE
-                        )
-                    else:
-                        await message.answer(
-                            INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE,
-                            reply_to_message_id=message.message_id,
-                        )
-                else:
-                    if status_msg:
-                        await status_msg.edit_text(
-                            "❌ Metama'lumotlarni olishning imkoni bo'lmadi."
-                        )
-                    else:
-                        await message.answer(
-                            "❌ Metama'lumotlarni olishning imkoni bo'lmadi.",
-                            reply_to_message_id=message.message_id,
-                        )
-            if track_user_job:
-                await job_controller.release(user_id)
-            return
-
-        summary = manager.formatter.build_summary(metadata)
-
-        if track_user_job:
-            await job_controller.wait_for_download_cooldown(user_id)
-
-        if is_group_chat:
-            media_items = await manager.download_media(metadata=metadata)
-            caption = _build_group_caption(message, url)
-        else:
-            media_items = await manager.download_media(metadata=metadata)
-            caption = DEFAULT_CAPTION
-
-        if not media_items:
-            raise RuntimeError("No media items returned")
-
-        sender = TelegramUploadSender(
-            message=message,
-            status_message=status_msg,
-            caption=caption,
-            request_timeout=TELEGRAM_UPLOAD_TIMEOUT_SECONDS,
-            media_group_limit=TELEGRAM_MEDIA_GROUP_LIMIT,
-            reply_to_message_id=None if not is_group_chat else message.message_id,
-        )
-        sent_messages = await sender.send(media_items)
-
-        await logger.log_media(message, url, sent_messages)
-
-        if wait_for_response and summary:
-            await message.answer(
-                summary,
-                disable_web_page_preview=True,
-            )
-        if status_msg:
-            await status_msg.delete()
-        if track_user_job:
-            await job_controller.release(user_id)
-
-    except Exception as e:
-        traceback.print_exc()
-        instagram_error = getattr(manager.downloader, "_last_error", None)
-        error_text = instagram_error or str(e)
-
-        await logger.log_error(message, url, error_text)
-
-        if not is_group_chat:
-            if platform.name == "instagram":
-                message_text = INSTAGRAM_TEMPORARILY_UNAVAILABLE_MESSAGE
-                if instagram_error:
-                    message_text = f"{message_text}\n\n{instagram_error}"
-                if status_msg:
-                    await status_msg.edit_text(message_text)
-                else:
-                    await message.answer(
-                        message_text,
-                        reply_to_message_id=message.message_id,
-                    )
-            else:
-                if status_msg:
-                    await status_msg.edit_text("❌ Kutilmagan xatolik yuz berdi.")
-                else:
-                    await message.answer(
-                        "❌ Kutilmagan xatolik yuz berdi.",
-                        reply_to_message_id=message.message_id,
-                    )
-
-        if track_user_job:
-            await job_controller.release(user_id)
-
+    service = MediaProcessorService(bot)
+    await service.process_request(
+        message=message,
+        url=url,
+        platform=platform,
+        is_group_chat=is_group_chat,
+        track_user_job=track_user_job,
+    )
