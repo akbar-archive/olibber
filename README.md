@@ -4,20 +4,23 @@
 
 ## About
 
-A Telegram bot that downloads Instagram posts, reels, and stories and sends them straight into your chat.
+A Telegram bot that downloads Instagram and YouTube content and sends it straight into your chat.
 
 ---
 
 ## What It Does
 
-Send an Instagram link to the bot — it downloads the photos or videos and sends them back to you in Telegram. That's it.
+Send an Instagram or YouTube link to the bot — it downloads the photos or videos and sends them back to you in Telegram. That's it.
 
-**Supported content:** Posts, reels.
+**Supported content:**
+- **Instagram** — posts, reels, stories
+- **YouTube** — videos, Shorts
 
 ## Features
 
-- 📸 **Download posts & reels** — Just paste a link, get the media
-- 🎬 **Stories support** — Download stories too
+- 📸 **Instagram posts & reels** — Just paste a link, get the media
+- 🎬 **Instagram stories** — Download stories too
+- ▶️ **YouTube videos & Shorts** — Paste any YouTube link and get the video
 - 👥 **Group chats** — Add to a group, make it admin, and anyone can use it
 - ⚡ **Fast** — Streams media directly, no waiting for downloads
 - 🔒 **Rate limiting** — Prevents spam and abuse
@@ -43,7 +46,7 @@ Edit `.env` with your values.
 ### 3. Generate Instagram session
 
 ```bash
-python tools/instagram_session_b64.py
+python scripts/instagram_session_b64.py
 ```
 
 Enter your Instagram credentials. Copy the output into `INSTALOADER_SESSION_B64` in your `.env`.
@@ -62,7 +65,7 @@ If you do not want to do all of them, just go to [@olibberBot](https://t.me/olib
 
 ## How It Works
 
-1. User sends an Instagram link
+1. User sends an Instagram or YouTube link
 2. Bot fetches the media
 3. Bot sends the photos/videos back to the chat
 4. Done ✨
