@@ -1,6 +1,10 @@
-from aiogram import types
+from aiogram import Router, types
+from aiogram.filters import Command, CommandStart
+
+router = Router()
 
 
+@router.message(CommandStart())
 async def handle_start(message: types.Message) -> None:
     await message.answer(
         "Salom! 👋\n\n"
@@ -9,6 +13,7 @@ async def handle_start(message: types.Message) -> None:
     )
 
 
+@router.message(Command("help"))
 async def handle_help(message: types.Message) -> None:
     await message.answer(
         "<b>📥 Olibber Bot</b>\n\n"

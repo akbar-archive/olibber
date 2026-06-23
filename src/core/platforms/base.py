@@ -28,6 +28,7 @@ class MediaItem:
     duration: int | None = None
     title: str | None = None
     author: str | None = None
+    file_id: str | None = None
     formats: list[MediaFormat] = field(default_factory=list)
 
 
